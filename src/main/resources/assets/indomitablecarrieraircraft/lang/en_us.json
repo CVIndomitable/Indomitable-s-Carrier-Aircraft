@@ -1,4 +1,8 @@
 {
   "item.indomitable_carrier_aircraft.tab": "Indomitable's Carrier Aircraft",
-  "itemGroup.indomitablecarrieraircraft.main": "Indomitable's Carrier Aircraft"
+  "itemGroup.indomitablecarrieraircraft.main": "Indomitable's Carrier Aircraft",
+  "itemGroup.indomitablecarrieraircraft.carrier_aircraft": "Indomitable's Carrier Aircraft",
+  "item.indomitablecarrieraircraft.bomber_spawner": "Bomber Aircraft Spawner",
+  "entity.indomitablecarrieraircraft.bomber_aircraft": "Bomber Aircraft",
+  "entity.indomitablecarrieraircraft.bomb": "Bomb"
 }

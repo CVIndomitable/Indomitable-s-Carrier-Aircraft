@@ -1,4 +1,8 @@
 {
   "item.indomitable_carrier_aircraft.tab": "不挠的舰载机",
-  "itemGroup.indomitablecarrieraircraft.main": "不挠的舰载机"
+  "itemGroup.indomitablecarrieraircraft.main": "不挠的舰载机",
+  "itemGroup.indomitablecarrieraircraft.carrier_aircraft": "不挠的舰载机",
+  "item.indomitablecarrieraircraft.bomber_spawner": "水平轰炸机召唤器",
+  "entity.indomitablecarrieraircraft.bomber_aircraft": "水平轰炸机",
+  "entity.indomitablecarrieraircraft.bomb": "炸弹"
 }
