@@ -69,8 +69,14 @@ public class AircraftSpawnerItem extends Item {
             aircraft.setTarget(target);
         }
 
-        level.addFreshEntity(aircraft);
-        player.sendSystemMessage(Component.literal("§a已召唤水平轰炸机"));
+        boolean success = level.addFreshEntity(aircraft);
+        player.sendSystemMessage(Component.literal("§a已召唤水平轰炸机 (实体ID: " + aircraft.getId() + ", 添加成功: " + success + ")"));
+
+        // 调试信息
+        com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info(
+            "Spawning bomber aircraft at {} for player {}, success: {}",
+            spawnPos, player.getName().getString(), success
+        );
     }
 
     /**
