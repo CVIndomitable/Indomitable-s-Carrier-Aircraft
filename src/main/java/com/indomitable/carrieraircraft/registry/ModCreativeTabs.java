@@ -18,10 +18,10 @@ public class ModCreativeTabs {
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> CARRIER_AIRCRAFT_TAB =
             CREATIVE_TABS.register("carrier_aircraft", () -> CreativeModeTab.builder()
                     .title(Component.translatable("itemGroup.indomitablecarrieraircraft.carrier_aircraft"))
-                    .icon(() -> new ItemStack(ModItems.BOMBER_SPAWNER.get()))
+                    .icon(() -> new ItemStack(ModItems.B25_SPAWNER.get()))
                     .displayItems((parameters, output) -> {
-                        // Phase 1: 只有轰炸机召唤物品
-                        output.accept(ModItems.BOMBER_SPAWNER.get());
+                        // Phase 1: B-25轰炸机召唤物品
+                        output.accept(ModItems.B25_SPAWNER.get());
                     })
                     .build()
             );

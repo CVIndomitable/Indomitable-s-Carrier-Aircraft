@@ -16,8 +16,8 @@ public class ModItems {
 
     // ==================== Phase 1: 飞机召唤物品 ====================
 
-    public static final DeferredHolder<Item, AircraftSpawnerItem> BOMBER_SPAWNER =
-            ITEMS.register("bomber_spawner", () -> new AircraftSpawnerItem(
+    public static final DeferredHolder<Item, AircraftSpawnerItem> B25_SPAWNER =
+            ITEMS.register("b25_spawner", () -> new AircraftSpawnerItem(
                     new Item.Properties()
                             .stacksTo(1)
             ));

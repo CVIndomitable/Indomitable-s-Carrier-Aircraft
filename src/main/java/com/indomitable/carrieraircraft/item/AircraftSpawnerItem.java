@@ -55,28 +55,40 @@ public class AircraftSpawnerItem extends Item {
      * 召唤飞机
      */
     private void spawnAircraft(ServerLevel level, Player player) {
+        com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info("=== AIRCRAFT SPAWN REQUESTED ===");
+
         Vec3 spawnPos = player.position().add(0, SPAWN_HEIGHT_OFFSET, 0);
+        com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info("Spawn position: {}", spawnPos);
 
-        BomberAircraftEntity aircraft = BomberAircraftEntity.create(
-                level,
-                player.getUUID(),
-                spawnPos
-        );
+        try {
+            BomberAircraftEntity aircraft = BomberAircraftEntity.create(
+                    level,
+                    player.getUUID(),
+                    spawnPos
+            );
+            com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info("Aircraft entity created successfully: {}", aircraft);
 
-        // 如果玩家已有锁定目标，立即分配给飞机
-        Vec3 target = FireControlSystem.getInstance().getTarget(player.getUUID());
-        if (target != null) {
-            aircraft.setTarget(target);
+            // 如果玩家已有锁定目标，立即分配给飞机
+            Vec3 target = FireControlSystem.getInstance().getTarget(player.getUUID());
+            if (target != null) {
+                aircraft.setTarget(target);
+                com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info("Target set: {}", target);
+            }
+
+            boolean success = level.addFreshEntity(aircraft);
+            com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info("addFreshEntity result: {}", success);
+
+            player.sendSystemMessage(Component.literal("§a已召唤B-25轰炸机 (实体ID: " + aircraft.getId() + ", 添加成功: " + success + ")"));
+
+            if (success) {
+                com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info("✅ Aircraft spawned successfully at {} for player {}", spawnPos, player.getName().getString());
+            } else {
+                com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.error("❌ Failed to add aircraft entity to world");
+            }
+        } catch (Exception e) {
+            com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.error("❌ Exception during aircraft spawn", e);
+            player.sendSystemMessage(Component.literal("§c召唤失败: " + e.getMessage()));
         }
-
-        boolean success = level.addFreshEntity(aircraft);
-        player.sendSystemMessage(Component.literal("§a已召唤水平轰炸机 (实体ID: " + aircraft.getId() + ", 添加成功: " + success + ")"));
-
-        // 调试信息
-        com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info(
-            "Spawning bomber aircraft at {} for player {}, success: {}",
-            spawnPos, player.getName().getString(), success
-        );
     }
 
     /**

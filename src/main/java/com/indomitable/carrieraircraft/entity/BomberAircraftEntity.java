@@ -18,7 +18,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.UUID;
 
 /**
- * 水平轰炸机实体 - Phase 1 MVP
+ * B-25轰炸机实体 - Phase 1 MVP
  *
  * 特性：
  * - 基础状态机（STANDBY、APPROACH、DROPPING、RETURNING）
@@ -57,6 +57,9 @@ public class BomberAircraftEntity extends FlyingMob {
     /** 到达目标的容差距离 */
     private static final double ARRIVAL_THRESHOLD = 3.0;
 
+    /** 待命时的悬停阈值（避免抖动） */
+    private static final double HOVER_THRESHOLD = 2.0;
+
     // ==================== 状态数据 ====================
 
     /** 所属玩家 UUID */
@@ -77,7 +80,7 @@ public class BomberAircraftEntity extends FlyingMob {
 
     /** 便捷构造函数：创建飞机 */
     public static BomberAircraftEntity create(ServerLevel level, UUID ownerUUID, Vec3 spawnPos) {
-        BomberAircraftEntity aircraft = new BomberAircraftEntity(ModEntityTypes.BOMBER_AIRCRAFT.get(), level);
+        BomberAircraftEntity aircraft = new BomberAircraftEntity(ModEntityTypes.B25_BOMBER.get(), level);
         aircraft.setPos(spawnPos);
         aircraft.ownerUUID = ownerUUID;
         aircraft.setState(AircraftState.STANDBY);
@@ -146,7 +149,15 @@ public class BomberAircraftEntity extends FlyingMob {
 
         // 盘旋在玩家头顶
         Vec3 standbyPos = owner.position().add(0, STANDBY_HEIGHT_OFFSET, 0);
-        flyTowards(standbyPos);
+        double distSq = this.position().distanceToSqr(standbyPos);
+
+        // 只有距离超过悬停阈值时才移动，避免抖动
+        if (distSq > HOVER_THRESHOLD * HOVER_THRESHOLD) {
+            flyTowards(standbyPos);
+        } else {
+            // 已到达悬停位置，停止移动
+            this.setDeltaMovement(Vec3.ZERO);
+        }
 
         // 如果有目标，进入赶赴状态
         if (targetPosition != null) {

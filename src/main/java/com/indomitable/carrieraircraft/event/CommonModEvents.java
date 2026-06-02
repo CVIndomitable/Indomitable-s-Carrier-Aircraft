@@ -16,9 +16,21 @@ public class CommonModEvents {
 
     @SubscribeEvent
     public static void registerEntityAttributes(EntityAttributeCreationEvent event) {
-        // Phase 1: 注册轰炸机实体属性
-        event.put(ModEntityTypes.BOMBER_AIRCRAFT.get(), BomberAircraftEntity.createAttributes().build());
+        IndomitableCarrierAircraft.LOGGER.info("=== EntityAttributeCreationEvent FIRED ===");
 
-        IndomitableCarrierAircraft.LOGGER.info("Registered bomber aircraft entity attributes");
+        // Phase 1: 注册B-25轰炸机实体属性
+        try {
+            var entityType = ModEntityTypes.B25_BOMBER.get();
+            IndomitableCarrierAircraft.LOGGER.info("Got B-25 bomber entity type: {}", entityType);
+
+            var attributes = BomberAircraftEntity.createAttributes().build();
+            IndomitableCarrierAircraft.LOGGER.info("Created attributes: {}", attributes);
+
+            event.put(entityType, attributes);
+            IndomitableCarrierAircraft.LOGGER.info("✅ Successfully registered B-25 bomber entity attributes");
+        } catch (Exception e) {
+            IndomitableCarrierAircraft.LOGGER.error("❌ Failed to register B-25 bomber attributes", e);
+            throw e;
+        }
     }
 }

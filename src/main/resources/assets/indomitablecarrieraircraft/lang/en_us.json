@@ -2,7 +2,7 @@
   "item.indomitable_carrier_aircraft.tab": "Indomitable's Carrier Aircraft",
   "itemGroup.indomitablecarrieraircraft.main": "Indomitable's Carrier Aircraft",
   "itemGroup.indomitablecarrieraircraft.carrier_aircraft": "Indomitable's Carrier Aircraft",
-  "item.indomitablecarrieraircraft.bomber_spawner": "Bomber Aircraft Spawner",
-  "entity.indomitablecarrieraircraft.bomber_aircraft": "Bomber Aircraft",
+  "item.indomitablecarrieraircraft.b25_spawner": "B-25 Bomber Spawner",
+  "entity.indomitablecarrieraircraft.b25_bomber": "B-25 Bomber",
   "entity.indomitablecarrieraircraft.bomb": "Bomb"
 }

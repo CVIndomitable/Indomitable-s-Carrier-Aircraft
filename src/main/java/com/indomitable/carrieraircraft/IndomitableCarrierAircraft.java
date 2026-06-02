@@ -28,15 +28,30 @@ public class IndomitableCarrierAircraft {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public IndomitableCarrierAircraft(IEventBus modEventBus, ModContainer modContainer) {
+        LOGGER.info("=== Indomitable's Carrier Aircraft Initialization START ===");
+
         // 注册所有子系统
+        LOGGER.info("Registering DataComponents...");
         ModDataComponents.DATA_COMPONENTS.register(modEventBus);
+
+        LOGGER.info("Registering Blocks...");
         ModBlocks.BLOCKS.register(modEventBus);
+
+        LOGGER.info("Registering Items...");
         ModItems.ITEMS.register(modEventBus);
+
+        LOGGER.info("Registering Creative Tabs...");
         ModCreativeTabs.CREATIVE_TABS.register(modEventBus);
+
+        LOGGER.info("Registering Menu Types...");
         ModMenuTypes.MENU_TYPES.register(modEventBus);
+
+        LOGGER.info("Registering Entity Types...");
         ModEntityTypes.ENTITY_TYPES.register(modEventBus);
+
+        LOGGER.info("Registering Sounds...");
         ModSounds.SOUND_EVENTS.register(modEventBus);
 
-        LOGGER.info("Indomitable's Carrier Aircraft mod initialized!");
+        LOGGER.info("=== Indomitable's Carrier Aircraft Initialization COMPLETE ===");
     }
 }

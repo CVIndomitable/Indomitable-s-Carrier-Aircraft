@@ -1,26 +1,29 @@
 package com.indomitable.carrieraircraft.client.renderer;
 
+import com.indomitable.carrieraircraft.client.model.B25Model;
 import com.indomitable.carrieraircraft.entity.BomberAircraftEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * 轰炸机渲染器 - Phase 1 简化版本
- *
- * 当前实现：使用简单的方块模型
- * TODO: Phase 2 添加自定义模型和纹理
+ * B-25轰炸机渲染器 - 使用本地B-25模型
  */
 public class BomberAircraftRenderer extends EntityRenderer<BomberAircraftEntity> {
     private static final ResourceLocation TEXTURE =
-            ResourceLocation.parse("indomitablecarrieraircraft:textures/entity/bomber_aircraft.png");
+            ResourceLocation.parse("indomitablecarrieraircraft:textures/entity/b25.png");
+
+    private final B25Model<BomberAircraftEntity> model;
 
     public BomberAircraftRenderer(EntityRendererProvider.Context context) {
         super(context);
         this.shadowRadius = 1.5F;
+        this.model = new B25Model<>(context.bakeLayer(B25Model.LAYER_LOCATION));
     }
 
     @Override
@@ -28,11 +31,21 @@ public class BomberAircraftRenderer extends EntityRenderer<BomberAircraftEntity>
                        PoseStack poseStack, MultiBufferSource buffer, int packedLight) {
         poseStack.pushPose();
 
-        // 简单旋转以匹配飞机朝向
-        poseStack.mulPose(Axis.YP.rotationDegrees(-entityYaw));
+        // 标准MC实体旋转：YP(180 - yaw) + scale(-1, -1, 1)
+        // 模型朝向-Z（机头在Z=-5），此旋转将机头转到+Z（yaw=0时朝南）
+        poseStack.mulPose(Axis.YP.rotationDegrees(180.0F - entityYaw));
 
-        // TODO: Phase 2 - 渲染自定义模型
-        // 当前为空实现，只显示阴影
+        // 俯仰角处理
+        float pitch = net.minecraft.util.Mth.lerp(partialTicks, entity.xRotO, entity.getXRot());
+        poseStack.mulPose(Axis.XP.rotationDegrees(-pitch));
+
+        // 缩放和位移
+        poseStack.scale(-1.5F, -1.5F, 1.5F);
+        poseStack.translate(0.0, -1.501, 0.0);
+
+        // 渲染模型
+        VertexConsumer vertexConsumer = buffer.getBuffer(model.renderType(TEXTURE));
+        model.renderToBuffer(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY, -1);
 
         poseStack.popPose();
         super.render(entity, entityYaw, partialTicks, poseStack, buffer, packedLight);
