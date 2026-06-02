@@ -106,6 +106,14 @@ public class BomberAircraftEntity extends FlyingMob {
         if (!this.level().isClientSide) {
             updateStateMachine();
         }
+
+        // 调试：每20 tick输出一次位置
+        if (this.tickCount % 20 == 0) {
+            com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info(
+                "Bomber aircraft {} at {} state: {} ammo: {}",
+                this.getId(), this.position(), getState(), getAmmoCount()
+            );
+        }
     }
 
     /** 状态机更新 */
@@ -123,12 +131,15 @@ public class BomberAircraftEntity extends FlyingMob {
     /** 待命状态：在玩家头顶盘旋 */
     private void tickStandby() {
         if (ownerUUID == null) {
+            com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.warn("Aircraft {} has no owner, discarding", this.getId());
             this.discard();
             return;
         }
 
-        var owner = ((ServerLevel) this.level()).getEntity(ownerUUID);
+        // 获取玩家 - 使用getPlayerByUUID而不是getEntity
+        var owner = ((ServerLevel) this.level()).getServer().getPlayerList().getPlayer(ownerUUID);
         if (owner == null) {
+            com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.warn("Aircraft {} owner not found, discarding", this.getId());
             this.discard();
             return;
         }
@@ -195,7 +206,7 @@ public class BomberAircraftEntity extends FlyingMob {
             return;
         }
 
-        var owner = ((ServerLevel) this.level()).getEntity(ownerUUID);
+        var owner = ((ServerLevel) this.level()).getServer().getPlayerList().getPlayer(ownerUUID);
         if (owner == null) {
             this.discard();
             return;
