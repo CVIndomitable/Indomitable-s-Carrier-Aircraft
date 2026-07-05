@@ -1,8 +1,8 @@
 package com.indomitable.carrieraircraft.registry;
 
 import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
+import com.indomitable.carrieraircraft.entity.AircraftEntity;
 import com.indomitable.carrieraircraft.entity.BombEntity;
-import com.indomitable.carrieraircraft.entity.BomberAircraftEntity;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.MobCategory;
@@ -17,19 +17,23 @@ public class ModEntityTypes {
     public static final DeferredRegister<EntityType<?>> ENTITY_TYPES =
             DeferredRegister.create(Registries.ENTITY_TYPE, IndomitableCarrierAircraft.MOD_ID);
 
-    // ==================== Phase 1: B-25轰炸机与炸弹 ====================
+    // ==================== 飞机与航空弹药 ====================
 
-    public static final DeferredHolder<EntityType<?>, EntityType<BomberAircraftEntity>> B25_BOMBER =
-            ENTITY_TYPES.register("b25_bomber", () -> {
-                com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info("Creating B25_BOMBER entity type");
+    /**
+     * 统一飞机实体类型。
+     * 机型由武器槽配置决定，不使用硬编码枚举。
+     */
+    public static final DeferredHolder<EntityType<?>, EntityType<AircraftEntity>> AIRCRAFT =
+            ENTITY_TYPES.register("aircraft", () -> {
+                IndomitableCarrierAircraft.LOGGER.info("Creating AIRCRAFT entity type");
                 return EntityType.Builder.of(
-                        BomberAircraftEntity::new,
+                        AircraftEntity::new,
                         MobCategory.MISC
                 )
                 .sized(2.0F, 1.0F) // 宽度2格，高度1格
                 .clientTrackingRange(128)
                 .updateInterval(1)
-                .build("b25_bomber");
+                .build("aircraft");
             });
 
     public static final DeferredHolder<EntityType<?>, EntityType<BombEntity>> BOMB =

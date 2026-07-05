@@ -12,5 +12,5 @@ public class ModBlocks {
     public static final DeferredRegister<Block> BLOCKS =
             DeferredRegister.createBlocks(IndomitableCarrierAircraft.MOD_ID);
 
-    // TODO: Phase 3 - 添加控制面板方块
+    // 控制面板当前以 ControlTerminalItem 形式实现。
 }

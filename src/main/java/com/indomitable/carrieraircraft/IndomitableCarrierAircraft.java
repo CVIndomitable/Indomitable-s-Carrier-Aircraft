@@ -19,8 +19,8 @@ import org.slf4j.Logger;
  *   6. ModEntityTypes        — 实体类型（飞机/弹药实体）
  *   7. ModSounds             — 音效注册
  *
- * 项目阶段：MVP - Phase 1
- * 当前目标：单一机型（水平轰炸机）+ 基础状态机 + 简单弹道 + 火控系统
+ * 项目阶段：核心玩法版
+ * 当前目标：多机型 + 完整状态机骨架 + 火控/编组/控制终端闭环
  */
 @Mod(IndomitableCarrierAircraft.MOD_ID)
 public class IndomitableCarrierAircraft {

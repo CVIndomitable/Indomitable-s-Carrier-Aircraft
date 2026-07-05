@@ -1,0 +1,22 @@
+{
+  "speed": 0.50,
+  "standby_height": 20.0,
+  "attack_height": 24.0,
+  "attack_range": 16.0,
+  "turn_distance": 56.0,
+  "health": 42.0,
+  "sea_ammo_capacity": 5,
+  "magazine_capacity": 0,
+  "burst_size": 1,
+  "weapon_damage": 18.0,
+  "explosion_radius": 3.5,
+  "turret_range": 0.0,
+  "asw_range": 48.0,
+  "air_weapon_mode": "none",
+  "sea_attack_modes": [
+    "asw_bombing"
+  ],
+  "allowed_sea_ammo": [
+    "aerial_bomb"
+  ]
+}

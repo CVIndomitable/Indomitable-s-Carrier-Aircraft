@@ -12,5 +12,5 @@ public class ModSounds {
     public static final DeferredRegister<SoundEvent> SOUND_EVENTS =
             DeferredRegister.create(Registries.SOUND_EVENT, IndomitableCarrierAircraft.MOD_ID);
 
-    // TODO: Phase 5 - 添加飞机引擎声、轰炸声等音效
+    // 音效资源留给后续美术/音频打磨。
 }

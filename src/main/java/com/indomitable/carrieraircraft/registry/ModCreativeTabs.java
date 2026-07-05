@@ -20,8 +20,17 @@ public class ModCreativeTabs {
                     .title(Component.translatable("itemGroup.indomitablecarrieraircraft.carrier_aircraft"))
                     .icon(() -> new ItemStack(ModItems.B25_SPAWNER.get()))
                     .displayItems((parameters, output) -> {
-                        // Phase 1: B-25轰炸机召唤物品
                         output.accept(ModItems.B25_SPAWNER.get());
+                        output.accept(ModItems.BTD_SPAWNER.get());
+                        output.accept(ModItems.BTD_TORPEDO_SPAWNER.get());
+                        output.accept(ModItems.ROCKET_ATTACKER_SPAWNER.get());
+                        output.accept(ModItems.ASW_PATROL_SPAWNER.get());
+                        output.accept(ModItems.CONTROL_TERMINAL.get());
+                        output.accept(ModItems.DEBUG_TOOL.get());
+                        output.accept(ModItems.AIRCRAFT_MAGAZINE.get());
+                        output.accept(ModItems.AERIAL_BOMB.get());
+                        output.accept(ModItems.AERIAL_TORPEDO.get());
+                        output.accept(ModItems.AIRCRAFT_ROCKET.get());
                     })
                     .build()
             );

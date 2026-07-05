@@ -1,18 +1,37 @@
 package com.indomitable.carrieraircraft.registry;
 
 import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
+import com.mojang.serialization.Codec;
 import net.minecraft.core.component.DataComponentType;
-import net.minecraft.core.registries.Registries;
+import net.minecraft.util.ExtraCodecs;
+import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
 /**
- * DataComponent 注册器
- * 用于存储飞机状态、弹药数量、锁定目标等数据
+ * DataComponent 注册器。
+ *
+ * <p>飞机物品回收后通过数据组件携带剩余弹药信息。
  */
 public class ModDataComponents {
-    public static final DeferredRegister.DataComponents DATA_COMPONENTS =
-            DeferredRegister.createDataComponents(Registries.DATA_COMPONENT_TYPE, IndomitableCarrierAircraft.MOD_ID);
+    public static final DeferredRegister<DataComponentType<?>> DATA_COMPONENTS =
+            DeferredRegister.create(net.minecraft.core.registries.Registries.DATA_COMPONENT_TYPE,
+                    IndomitableCarrierAircraft.MOD_ID);
 
-    // TODO: Phase 1 - 添加飞机相关的 DataComponent
-    // 例如：AIRCRAFT_STATE（状态机状态）、AMMO_COUNT（弹药数量）、TARGET_LIST（锁定目标列表）等
+    /** 对海弹药剩余量 */
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<Integer>> SEA_AMMO_COUNT =
+            DATA_COMPONENTS.register("sea_ammo_count", () ->
+                    DataComponentType.<Integer>builder().persistent(
+                            net.minecraft.util.ExtraCodecs.NON_NEGATIVE_INT).build());
+
+    /** 对空弹药剩余量 */
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<Integer>> AIR_AMMO_COUNT =
+            DATA_COMPONENTS.register("air_ammo_count", () ->
+                    DataComponentType.<Integer>builder().persistent(
+                            net.minecraft.util.ExtraCodecs.NON_NEGATIVE_INT).build());
+
+    /** 飞机机型 ID */
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<String>> AIRCRAFT_ROLE =
+            DATA_COMPONENTS.register("aircraft_role", () ->
+                    DataComponentType.<String>builder().persistent(
+                            Codec.STRING).build());
 }

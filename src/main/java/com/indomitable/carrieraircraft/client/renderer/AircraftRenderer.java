@@ -1,7 +1,7 @@
 package com.indomitable.carrieraircraft.client.renderer;
 
 import com.indomitable.carrieraircraft.client.model.B25Model;
-import com.indomitable.carrieraircraft.entity.BomberAircraftEntity;
+import com.indomitable.carrieraircraft.entity.AircraftEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
@@ -12,27 +12,26 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * B-25轰炸机渲染器 - 使用本地B-25模型
+ * 飞机渲染器 - 使用本地B-25模型（后续按机型切换模型/皮肤）
  */
-public class BomberAircraftRenderer extends EntityRenderer<BomberAircraftEntity> {
+public class AircraftRenderer extends EntityRenderer<AircraftEntity> {
     private static final ResourceLocation TEXTURE =
             ResourceLocation.parse("indomitablecarrieraircraft:textures/entity/b25.png");
 
-    private final B25Model<BomberAircraftEntity> model;
+    private final B25Model<AircraftEntity> model;
 
-    public BomberAircraftRenderer(EntityRendererProvider.Context context) {
+    public AircraftRenderer(EntityRendererProvider.Context context) {
         super(context);
         this.shadowRadius = 1.5F;
         this.model = new B25Model<>(context.bakeLayer(B25Model.LAYER_LOCATION));
     }
 
     @Override
-    public void render(BomberAircraftEntity entity, float entityYaw, float partialTicks,
+    public void render(AircraftEntity entity, float entityYaw, float partialTicks,
                        PoseStack poseStack, MultiBufferSource buffer, int packedLight) {
         poseStack.pushPose();
 
         // 标准MC实体旋转：YP(180 - yaw) + scale(-1, -1, 1)
-        // 模型朝向-Z（机头在Z=-5），此旋转将机头转到+Z（yaw=0时朝南）
         poseStack.mulPose(Axis.YP.rotationDegrees(180.0F - entityYaw));
 
         // 俯仰角处理
@@ -52,7 +51,7 @@ public class BomberAircraftRenderer extends EntityRenderer<BomberAircraftEntity>
     }
 
     @Override
-    public ResourceLocation getTextureLocation(BomberAircraftEntity entity) {
+    public ResourceLocation getTextureLocation(AircraftEntity entity) {
         return TEXTURE;
     }
 }

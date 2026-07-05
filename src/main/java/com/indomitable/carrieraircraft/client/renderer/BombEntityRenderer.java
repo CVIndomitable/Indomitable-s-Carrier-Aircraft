@@ -12,10 +12,9 @@ import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.Items;
 
 /**
- * 炸弹渲染器 - Phase 1 简化版本
+ * 航空弹药渲染器。
  *
- * 当前实现：使用 TNT 物品模型
- * TODO: Phase 2 添加自定义模型和纹理
+ * <p>当前实现使用 TNT 物品模型作为通用可视化，后续可替换为各弹种模型。
  */
 public class BombEntityRenderer extends EntityRenderer<BombEntity> {
     private static final ResourceLocation TEXTURE =

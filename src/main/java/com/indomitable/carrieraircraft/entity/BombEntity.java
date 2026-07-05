@@ -8,14 +8,19 @@ import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.ExplosionDamageCalculator;
+import net.minecraft.world.level.SimpleExplosionDamageCalculator;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.Optional;
+
 /**
- * 炸弹实体 - Phase 1 MVP 版本
+ * 航空弹药实体。
  *
  * 特性：
  * - 自由落体物理（重力 + 空气阻力）
@@ -34,6 +39,9 @@ public class BombEntity extends Entity {
     private static final EntityDataAccessor<Float> DATA_DAMAGE =
             SynchedEntityData.defineId(BombEntity.class, EntityDataSerializers.FLOAT);
 
+    private static final EntityDataAccessor<String> DATA_WEAPON_TYPE =
+            SynchedEntityData.defineId(BombEntity.class, EntityDataSerializers.STRING);
+
     /** 重力加速度 (blocks/tick²) */
     private static final double GRAVITY = 0.05;
 
@@ -43,7 +51,12 @@ public class BombEntity extends Entity {
     /** 最大存活时间 (ticks)，防止卡住 */
     private static final int MAX_LIFETIME = 400; // 20秒
 
-    private int tickCount = 0;
+    /** 爆炸只破坏方块（受 mobGriefing 规则约束）；实体伤害由 explode() 里的衰减公式控制，避免双重伤害 */
+    private static final ExplosionDamageCalculator BLOCK_ONLY_EXPLOSION =
+            new SimpleExplosionDamageCalculator(true, false, Optional.empty(), Optional.empty());
+
+    /** 注意不要与 Entity#tickCount 同名，否则会遮蔽父类字段 */
+    private int lifeTicks = 0;
 
     public BombEntity(EntityType<? extends BombEntity> entityType, Level level) {
         super(entityType, level);
@@ -52,17 +65,24 @@ public class BombEntity extends Entity {
 
     /** 便捷构造函数：用于投弹 */
     public BombEntity(Level level, Vec3 position, Vec3 initialVelocity, float explosionRadius, float damage) {
+        this(level, position, initialVelocity, explosionRadius, damage, "AERIAL_BOMB");
+    }
+
+    /** 便捷构造函数：用于投放不同航空弹药 */
+    public BombEntity(Level level, Vec3 position, Vec3 initialVelocity, float explosionRadius, float damage, String weaponType) {
         this(ModEntityTypes.BOMB.get(), level);
         this.setPos(position);
         this.setDeltaMovement(initialVelocity);
         this.setExplosionRadius(explosionRadius);
         this.setDamage(damage);
+        this.setWeaponType(weaponType);
     }
 
     @Override
     protected void defineSynchedData(SynchedEntityData.Builder builder) {
         builder.define(DATA_EXPLOSION_RADIUS, 3.0F);
         builder.define(DATA_DAMAGE, 20.0F);
+        builder.define(DATA_WEAPON_TYPE, "AERIAL_BOMB");
     }
 
     @Override
@@ -71,7 +91,7 @@ public class BombEntity extends Entity {
 
         if (!this.level().isClientSide) {
             // 超时自动移除
-            if (++tickCount > MAX_LIFETIME) {
+            if (++lifeTicks > MAX_LIFETIME) {
                 this.discard();
                 return;
             }
@@ -122,10 +142,10 @@ public class BombEntity extends Entity {
             }
         }
 
-        // 检查是否碰撞实体
+        // 检查是否碰撞实体（不与投弹的飞机和其他弹药相互引爆）
         AABB aabb = this.getBoundingBox().inflate(0.5);
         return !this.level().getEntities(this, aabb,
-                e -> e != this && !(e instanceof BombEntity)).isEmpty();
+                e -> e != this && !(e instanceof BombEntity) && !(e instanceof AircraftEntity)).isEmpty();
     }
 
     /** 爆炸处理 */
@@ -135,17 +155,34 @@ public class BombEntity extends Entity {
         float radius = this.getExplosionRadius();
         float damage = this.getDamage();
 
-        // 创建爆炸
+        AABB damageBox = this.getBoundingBox().inflate(radius);
+        for (LivingEntity target : this.level().getEntitiesOfClass(LivingEntity.class, damageBox, LivingEntity::isAlive)) {
+            if (target instanceof AircraftEntity) {
+                continue;
+            }
+            double distance = target.distanceTo(this);
+            if (distance > radius) {
+                continue;
+            }
+            float scaledDamage = (float) (damage * (1.0 - distance / (radius + 1.0)));
+            if (scaledDamage <= 0.0F) {
+                continue;
+            }
+            target.hurt(this.damageSources().explosion(this, null), scaledDamage);
+        }
+
+        // 爆炸只负责方块破坏、视效与击退；MOB 模式受 mobGriefing 游戏规则约束
         this.level().explode(
                 this,
+                null,
+                BLOCK_ONLY_EXPLOSION,
                 this.getX(),
                 this.getY(),
                 this.getZ(),
                 radius,
-                Level.ExplosionInteraction.TNT
+                false,
+                Level.ExplosionInteraction.MOB
         );
-
-        // TODO: 添加自定义伤害逻辑（考虑护甲、附魔等）
 
         this.discard();
     }
@@ -168,23 +205,35 @@ public class BombEntity extends Entity {
         this.entityData.set(DATA_DAMAGE, damage);
     }
 
+    public String getWeaponType() {
+        return this.entityData.get(DATA_WEAPON_TYPE);
+    }
+
+    public void setWeaponType(String weaponType) {
+        this.entityData.set(DATA_WEAPON_TYPE, weaponType);
+    }
+
     // ==================== NBT 序列化 ====================
 
     @Override
     protected void readAdditionalSaveData(CompoundTag compound) {
-        this.tickCount = compound.getInt("TickCount");
+        this.lifeTicks = compound.getInt("TickCount");
         if (compound.contains("ExplosionRadius")) {
             this.setExplosionRadius(compound.getFloat("ExplosionRadius"));
         }
         if (compound.contains("Damage")) {
             this.setDamage(compound.getFloat("Damage"));
         }
+        if (compound.contains("WeaponType")) {
+            this.setWeaponType(compound.getString("WeaponType"));
+        }
     }
 
     @Override
     protected void addAdditionalSaveData(CompoundTag compound) {
-        compound.putInt("TickCount", this.tickCount);
+        compound.putInt("TickCount", this.lifeTicks);
         compound.putFloat("ExplosionRadius", this.getExplosionRadius());
         compound.putFloat("Damage", this.getDamage());
+        compound.putString("WeaponType", this.getWeaponType());
     }
 }
