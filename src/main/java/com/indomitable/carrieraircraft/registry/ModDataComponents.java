@@ -34,4 +34,10 @@ public class ModDataComponents {
             DATA_COMPONENTS.register("aircraft_role", () ->
                     DataComponentType.<String>builder().persistent(
                             Codec.STRING).build());
+
+    /** 弹匣内剩余子弹数。未设置时视为满弹匣。 */
+    public static final DeferredHolder<DataComponentType<?>, DataComponentType<Integer>> MAGAZINE_ROUNDS =
+            DATA_COMPONENTS.register("magazine_rounds", () ->
+                    DataComponentType.<Integer>builder().persistent(
+                            ExtraCodecs.NON_NEGATIVE_INT).build());
 }

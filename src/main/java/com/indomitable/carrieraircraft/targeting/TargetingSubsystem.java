@@ -28,7 +28,7 @@ public final class TargetingSubsystem {
         FireControlSystem fireControl = FireControlSystem.getInstance();
         fireControl.pruneStaleTargets(ownerId, level);
 
-        FireControlTarget fireControlTarget = fireControl.getAssignedTarget(ownerId, aircraft.getUUID());
+        FireControlTarget fireControlTarget = fireControl.getAssignedTarget(level, ownerId, aircraft.getUUID());
         if (fireControlTarget != null && fireControlTarget.inDimension(level)) {
             Entity entity = fireControlTarget.resolveEntity(level);
             if (!fireControlTarget.isEntityTarget() || entity != null && entity.isAlive()) {
@@ -36,7 +36,7 @@ public final class TargetingSubsystem {
             }
         }
 
-        AutoLockMode mode = fireControl.settings(ownerId).autoLockMode();
+        AutoLockMode mode = fireControl.settings(level, ownerId).autoLockMode();
         Entity autoTarget = findAutomaticTarget(aircraft, level, mode);
         return autoTarget == null ? null : FireControlTarget.entity(autoTarget);
     }

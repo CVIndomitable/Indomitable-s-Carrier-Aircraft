@@ -65,10 +65,12 @@ public record FormationCommandPayload(byte action, UUID aircraftUUID,
                     UUID currentLeader = fm.getLeaderUUID(player.getUUID());
                     if (payload.aircraftUUID.equals(currentLeader)) {
                         fm.setLeader(player.getUUID(), null);
+                        fm.savePlayerData(player.serverLevel(), player.getUUID());
                         player.sendSystemMessage(
                                 Component.literal("已取消长机").withStyle(ChatFormatting.YELLOW));
                     } else {
                         fm.setLeader(player.getUUID(), payload.aircraftUUID);
+                        fm.savePlayerData(player.serverLevel(), player.getUUID());
                         player.sendSystemMessage(
                                 Component.literal("已设置长机: " + aircraft.getRole().displayName())
                                         .withStyle(ChatFormatting.GREEN));
@@ -83,6 +85,7 @@ public record FormationCommandPayload(byte action, UUID aircraftUUID,
                     AircraftEntity aircraft = resolveAircraft(player, payload.aircraftUUID);
                     if (aircraft == null) return;
                     fm.addToGroup(player.getUUID(), payload.aircraftUUID, payload.parameter);
+                    fm.savePlayerData(player.serverLevel(), player.getUUID());
                     player.sendSystemMessage(Component.literal(
                             String.format("已将 %s 加入编组 [%s]",
                                     aircraft.getRole().displayName(), payload.parameter))
@@ -90,6 +93,7 @@ public record FormationCommandPayload(byte action, UUID aircraftUUID,
                 }
                 case REMOVE_FROM_GROUP -> {
                     fm.removeFromGroup(player.getUUID(), payload.aircraftUUID);
+                    fm.savePlayerData(player.serverLevel(), player.getUUID());
                     AircraftEntity aircraft = resolveAircraft(player, payload.aircraftUUID);
                     String name = aircraft != null ? aircraft.getRole().displayName() : "飞机";
                     player.sendSystemMessage(
@@ -103,6 +107,7 @@ public record FormationCommandPayload(byte action, UUID aircraftUUID,
                         return;
                     }
                     fm.createGroup(player.getUUID(), payload.parameter);
+                    fm.savePlayerData(player.serverLevel(), player.getUUID());
                     player.sendSystemMessage(
                             Component.literal("已创建编组: " + payload.parameter)
                                     .withStyle(ChatFormatting.GREEN));

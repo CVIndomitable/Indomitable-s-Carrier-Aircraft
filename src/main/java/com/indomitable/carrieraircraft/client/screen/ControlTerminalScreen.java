@@ -137,10 +137,13 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     private boolean showFormation = false;
     private int openDropdown = -1;
     private int openFormationDropdown = -1;
+    private final List<String> localGroupNames = new ArrayList<>();
 
-    private Button btnSettings, btnRally, btnRecall, btnFormation;
+    private Button btnSettings, btnRally, btnRecall, btnFormation, btnRearm;
     private Button btnBack;            // 设置子页面的返回按钮
     private Button btnFormationBack;   // 编组子页面的返回按钮
+    private Button btnScoutView;       // 切入长机视角
+    private Button btnPlayerView;      // 切回玩家视角
     private Button btnAddTarget;       // 添加打击目标
 
     // 坐标输入框
@@ -174,35 +177,41 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
             onAddTarget();
         }).pos(leftPos + RIGHT_X + 2, topPos + MAP_Y + 64).size(RIGHT_W - 4, 14).build();
 
-        // ── 底部按钮区（单行 4 个按钮）──
+        // ── 底部按钮区（单行 5 个按钮）──
         int bx = leftPos + RIGHT_X;
         int by = topPos + BTN_AREA_Y;
-        int quarterW = RIGHT_W / 4;
+        int buttonW = RIGHT_W / 5;
 
         btnSettings = Button.builder(Component.literal("设置"), b -> {
             blurCoordFields();
             switchToSettings();
-        }).pos(bx, by).size(quarterW, 14).build();
+        }).pos(bx, by).size(buttonW, 14).build();
 
         btnFormation = Button.builder(Component.literal("编队"), b -> {
             blurCoordFields();
             switchToFormation();
-        }).pos(bx + quarterW, by).size(quarterW, 14).build();
+        }).pos(bx + buttonW, by).size(buttonW, 14).build();
 
         btnRally = Button.builder(Component.literal("盘旋"), b -> {
             blurCoordFields();
             sendCommand(CommandPayload.SET_RALLY_POINT);
-        }).pos(bx + quarterW * 2, by).size(quarterW, 14).build();
+        }).pos(bx + buttonW * 2, by).size(buttonW, 14).build();
 
         btnRecall = Button.builder(Component.literal("召回"), b -> {
             blurCoordFields();
             sendCommand(CommandPayload.RECALL_ALL);
-        }).pos(bx + quarterW * 3, by).size(quarterW, 14).build();
+        }).pos(bx + buttonW * 3, by).size(buttonW, 14).build();
+
+        btnRearm = Button.builder(Component.literal("补给"), b -> {
+            blurCoordFields();
+            sendCommand(CommandPayload.REARM_ALL);
+        }).pos(bx + buttonW * 4, by).size(RIGHT_W - buttonW * 4, 14).build();
 
         addRenderableWidget(btnSettings);
         addRenderableWidget(btnFormation);
         addRenderableWidget(btnRally);
         addRenderableWidget(btnRecall);
+        addRenderableWidget(btnRearm);
         addRenderableWidget(btnAddTarget);
 
         // ── 设置子页面返回按钮 ──
@@ -214,6 +223,14 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         btnFormationBack = Button.builder(Component.literal("← 返回"), b -> switchToMain())
                 .pos(leftPos + 8, topPos + 160).size(60, 14).build();
         addRenderableWidget(btnFormationBack);
+
+        btnScoutView = Button.builder(Component.literal("长机视角"), b -> sendCommand(CommandPayload.ENTER_LEADER_CAMERA))
+                .pos(leftPos + 74, topPos + 160).size(68, 14).build();
+        addRenderableWidget(btnScoutView);
+
+        btnPlayerView = Button.builder(Component.literal("玩家视角"), b -> sendCommand(CommandPayload.EXIT_LEADER_CAMERA))
+                .pos(leftPos + 148, topPos + 160).size(68, 14).build();
+        addRenderableWidget(btnPlayerView);
     }
 
     private void configureCoordField(EditBox field, String placeholder) {
@@ -263,12 +280,15 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         btnFormation.visible = main;
         btnRally.visible = main;
         btnRecall.visible = main;
+        btnRearm.visible = main;
         btnAddTarget.visible = main;
         inputX.visible = main;
         inputY.visible = main;
         inputZ.visible = main;
         btnBack.visible = showSettings;
         btnFormationBack.visible = showFormation;
+        btnScoutView.visible = showFormation;
+        btnPlayerView.visible = showFormation;
     }
 
     // ── 鼠标点击 ──
@@ -378,6 +398,9 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         if (mouseX >= leftPos + LEFT_X && mouseX < leftPos + LEFT_X + LEFT_W
                 && mouseY >= btnY && mouseY < btnY + 14) {
             String nextName = "编组" + (getGroupNames().size() + 1);
+            if (!localGroupNames.contains(nextName)) {
+                localGroupNames.add(nextName);
+            }
             PacketDistributor.sendToServer(new FormationCommandPayload(
                     FormationCommandPayload.CREATE_GROUP, UUID.randomUUID(), nextName));
             return true;
@@ -516,6 +539,9 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
             g.fill(RIGHT_X + 2, ry + 1, RIGHT_X + 4, ry + 9, MAP_RALLY);
             g.drawString(font, "盘旋", RIGHT_X + 7, ry, MAP_RALLY, false);
         }
+
+        g.drawString(font, "加载区块 " + menu.forcedChunkCount(),
+                RIGHT_X + 2, MAP_Y + MAP_H + 16, DIM_TEXT, false);
     }
 
     // ── 小地图 ──
@@ -672,6 +698,16 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
 
     private List<String> getGroupNames() {
         List<String> names = new ArrayList<>();
+        for (String name : menu.groupNames()) {
+            if (!names.contains(name)) {
+                names.add(name);
+            }
+        }
+        for (String name : localGroupNames) {
+            if (!names.contains(name)) {
+                names.add(name);
+            }
+        }
         for (var info : menu.aircraftList()) {
             String group = menu.aircraftGroup(info.uuid());
             if (group != null && !names.contains(group)) {

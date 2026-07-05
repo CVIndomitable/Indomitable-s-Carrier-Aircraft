@@ -4,6 +4,7 @@ import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
 import com.indomitable.carrieraircraft.aircraft.AirDefenseMode;
 import com.indomitable.carrieraircraft.aircraft.AssignmentMode;
 import com.indomitable.carrieraircraft.aircraft.AutoLockMode;
+import com.indomitable.carrieraircraft.entity.AircraftEntity;
 import com.indomitable.carrieraircraft.firecontrol.FireControlSystem;
 import com.indomitable.carrieraircraft.firecontrol.PlayerAirControlSettings;
 import com.indomitable.carrieraircraft.formation.FormationManager;
@@ -54,6 +55,9 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
     public static final byte SET_MIN_DMG_20 = 22;
     public static final byte SET_MIN_DMG_40 = 23;
     public static final byte SET_MIN_DMG_80 = 24;
+    public static final byte REARM_ALL = 25;
+    public static final byte ENTER_LEADER_CAMERA = 26;
+    public static final byte EXIT_LEADER_CAMERA = 27;
 
     public static final Type<CommandPayload> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(IndomitableCarrierAircraft.MOD_ID, "terminal_cmd"));
@@ -79,7 +83,8 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
     }
 
     private static void executeAction(ServerPlayer player, byte action) {
-        PlayerAirControlSettings settings = FireControlSystem.getInstance().settings(player.getUUID());
+        FireControlSystem fireControl = FireControlSystem.getInstance();
+        PlayerAirControlSettings settings = fireControl.settings(player.serverLevel(), player.getUUID());
 
         switch (action) {
             case CYCLE_AUTO_LOCK -> {
@@ -115,6 +120,15 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
                 int count = FormationManager.getInstance().recall(player.serverLevel(), player.getUUID());
                 player.sendSystemMessage(Component.literal("已召回 " + count + " 架飞机").withStyle(ChatFormatting.YELLOW));
             }
+            case REARM_ALL -> {
+                int count = FormationManager.getInstance().rearmAll(player.serverLevel(), player);
+                player.sendSystemMessage(Component.literal("已补给 " + count + " 架飞机").withStyle(ChatFormatting.AQUA));
+            }
+            case ENTER_LEADER_CAMERA -> enterLeaderCamera(player);
+            case EXIT_LEADER_CAMERA -> {
+                player.setCamera(player);
+                player.sendSystemMessage(Component.literal("已切回玩家视角").withStyle(ChatFormatting.YELLOW));
+            }
             // ── 直接设置（下拉菜单）──
             case SET_AUTO_LOCK_NEAREST -> setAutoLock(player, settings, AutoLockMode.NEAREST);
             case SET_AUTO_LOCK_STRONGEST -> setAutoLock(player, settings, AutoLockMode.STRONGEST);
@@ -137,6 +151,7 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
         }
 
         // 同步设置到 ContainerData，客户端 GUI 实时刷新
+        fireControl.saveSettings(player.serverLevel(), player.getUUID());
         syncMenu(player, settings);
     }
 
@@ -159,5 +174,15 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
     private static void setAirDefense(ServerPlayer player, PlayerAirControlSettings settings, AirDefenseMode mode) {
         settings.setAirDefenseMode(mode);
         player.sendSystemMessage(Component.literal("对空模式: " + mode.displayName()).withStyle(ChatFormatting.GREEN));
+    }
+
+    private static void enterLeaderCamera(ServerPlayer player) {
+        AircraftEntity leader = FormationManager.getInstance().getLeader(player.serverLevel(), player.getUUID());
+        if (leader == null) {
+            player.sendSystemMessage(Component.literal("当前没有可用长机").withStyle(ChatFormatting.RED));
+            return;
+        }
+        player.setCamera(leader);
+        player.sendSystemMessage(Component.literal("已切入长机视角，使用终端切回玩家视角").withStyle(ChatFormatting.AQUA));
     }
 }

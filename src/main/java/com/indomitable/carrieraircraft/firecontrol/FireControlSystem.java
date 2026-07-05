@@ -1,6 +1,7 @@
 package com.indomitable.carrieraircraft.firecontrol;
 
 import com.indomitable.carrieraircraft.aircraft.AssignmentMode;
+import com.indomitable.carrieraircraft.data.CarrierAircraftSavedData;
 import com.indomitable.carrieraircraft.targeting.FriendlyFireFilter;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -44,6 +45,18 @@ public class FireControlSystem {
         return settingsMap.computeIfAbsent(playerId, PlayerAirControlSettings::new);
     }
 
+    public PlayerAirControlSettings settings(ServerLevel level, UUID playerId) {
+        return settingsMap.computeIfAbsent(playerId,
+                id -> CarrierAircraftSavedData.get(level).loadSettings(id));
+    }
+
+    public void saveSettings(ServerLevel level, UUID playerId) {
+        PlayerAirControlSettings settings = settingsMap.get(playerId);
+        if (settings != null) {
+            CarrierAircraftSavedData.get(level).saveSettings(settings);
+        }
+    }
+
     public void addTarget(ServerPlayer player, FireControlTarget target) {
         List<FireControlTarget> targets = targetMap.computeIfAbsent(player.getUUID(), id -> new ArrayList<>());
         if (targets.size() >= MAX_TARGETS) {
@@ -70,6 +83,22 @@ public class FireControlSystem {
         }
 
         AssignmentMode mode = settings(playerUUID).assignmentMode();
+        if (mode == AssignmentMode.FOCUS || targets.size() == 1) {
+            return targets.get(0);
+        }
+
+        int index = Math.floorMod(aircraftUUID.hashCode(), targets.size());
+        return targets.get(index);
+    }
+
+    @Nullable
+    public FireControlTarget getAssignedTarget(ServerLevel level, UUID playerUUID, UUID aircraftUUID) {
+        List<FireControlTarget> targets = getTargets(playerUUID);
+        if (targets.isEmpty()) {
+            return null;
+        }
+
+        AssignmentMode mode = settings(level, playerUUID).assignmentMode();
         if (mode == AssignmentMode.FOCUS || targets.size() == 1) {
             return targets.get(0);
         }

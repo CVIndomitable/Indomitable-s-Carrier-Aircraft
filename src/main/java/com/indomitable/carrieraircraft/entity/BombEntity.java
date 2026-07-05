@@ -6,6 +6,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
@@ -18,6 +19,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 航空弹药实体。
@@ -58,6 +60,9 @@ public class BombEntity extends Entity {
     /** 注意不要与 Entity#tickCount 同名，否则会遮蔽父类字段 */
     private int lifeTicks = 0;
 
+    /** 制导弹使用的目标实体。只需服务端保存，客户端跟随实体同步即可。 */
+    private UUID targetUUID;
+
     public BombEntity(EntityType<? extends BombEntity> entityType, Level level) {
         super(entityType, level);
         this.setNoGravity(false); // 使用自定义重力
@@ -70,12 +75,19 @@ public class BombEntity extends Entity {
 
     /** 便捷构造函数：用于投放不同航空弹药 */
     public BombEntity(Level level, Vec3 position, Vec3 initialVelocity, float explosionRadius, float damage, String weaponType) {
+        this(level, position, initialVelocity, explosionRadius, damage, weaponType, null);
+    }
+
+    /** 便捷构造函数：用于需要追踪实体目标的弹药。 */
+    public BombEntity(Level level, Vec3 position, Vec3 initialVelocity, float explosionRadius, float damage,
+                      String weaponType, UUID targetUUID) {
         this(ModEntityTypes.BOMB.get(), level);
         this.setPos(position);
         this.setDeltaMovement(initialVelocity);
         this.setExplosionRadius(explosionRadius);
         this.setDamage(damage);
         this.setWeaponType(weaponType);
+        this.targetUUID = targetUUID;
     }
 
     @Override
@@ -109,8 +121,21 @@ public class BombEntity extends Entity {
 
     /** 应用物理模拟 */
     private void applyPhysics() {
-        Vec3 motion = this.getDeltaMovement();
+        String type = this.getWeaponType();
+        if ("GUIDED_BOMB".equals(type)) {
+            applyGuidedBombPhysics();
+        } else if ("AERIAL_TORPEDO".equals(type)) {
+            applyTorpedoPhysics();
+        } else if ("ROCKET".equals(type)) {
+            applyRocketPhysics();
+        } else {
+            applyFreeFallPhysics();
+        }
+    }
 
+    /** 自由落体航弹：重力 + 阻力。 */
+    private void applyFreeFallPhysics() {
+        Vec3 motion = this.getDeltaMovement();
         // 1. 应用空气阻力
         motion = motion.scale(DRAG_FACTOR);
 
@@ -124,6 +149,51 @@ public class BombEntity extends Entity {
         this.move(MoverType.SELF, motion);
     }
 
+    /** 俯冲轰炸航弹：短时间追踪目标，仍保留少量下坠。 */
+    private void applyGuidedBombPhysics() {
+        Vec3 motion = this.getDeltaMovement();
+        Entity target = resolveTarget();
+        if (target != null && target.isAlive()) {
+            Vec3 aimPoint = target.getBoundingBox().getCenter();
+            Vec3 desired = aimPoint.subtract(position());
+            if (desired.lengthSqr() > 0.0001) {
+                double speed = Math.max(0.75, motion.length());
+                motion = motion.scale(0.78).add(desired.normalize().scale(speed).scale(0.22));
+            }
+        }
+        motion = motion.scale(0.99).add(0, -GRAVITY * 0.45, 0);
+        this.setDeltaMovement(motion);
+        this.move(MoverType.SELF, motion);
+    }
+
+    /** 鱼雷：入水后定深自走；未入水时按重力下落。 */
+    private void applyTorpedoPhysics() {
+        Vec3 motion = this.getDeltaMovement();
+        if (this.isInWaterOrBubble()) {
+            Vec3 horizontal = new Vec3(motion.x, 0, motion.z);
+            if (horizontal.lengthSqr() < 0.0001) {
+                horizontal = new Vec3(0, 0, 1);
+            }
+            motion = horizontal.normalize().scale(0.78).add(0, -0.01, 0);
+        } else {
+            motion = motion.scale(0.99).add(0, -GRAVITY, 0);
+        }
+        this.setDeltaMovement(motion);
+        this.move(MoverType.SELF, motion);
+    }
+
+    /** 火箭：自走直线弹道，轻微阻力，不受重力显著影响。 */
+    private void applyRocketPhysics() {
+        Vec3 motion = this.getDeltaMovement();
+        if (motion.lengthSqr() < 0.0001) {
+            motion = new Vec3(0, -0.02, 1.0);
+        }
+        double speed = Math.max(1.15, motion.length() * 0.995);
+        motion = motion.normalize().scale(speed).add(0, -0.005, 0);
+        this.setDeltaMovement(motion);
+        this.move(MoverType.SELF, motion);
+    }
+
     /** 检查碰撞（地面或实体） */
     private boolean checkCollision() {
         // 检查是否接触地面
@@ -131,10 +201,12 @@ public class BombEntity extends Entity {
             return true;
         }
 
-        // 检查脚下方块
+        // 检查当前方块/脚下方块。水和空气没有实体碰撞形状，不会让鱼雷刚入水就爆炸。
+        if (hasSolidCollision(this.blockPosition())) {
+            return true;
+        }
         BlockPos belowPos = this.blockPosition().below();
-        BlockState belowState = this.level().getBlockState(belowPos);
-        if (!belowState.isAir()) {
+        if (hasSolidCollision(belowPos)) {
             // 距离方块表面很近
             double distToGround = this.getY() - belowPos.getY() - 1.0;
             if (distToGround < 0.3) {
@@ -146,6 +218,18 @@ public class BombEntity extends Entity {
         AABB aabb = this.getBoundingBox().inflate(0.5);
         return !this.level().getEntities(this, aabb,
                 e -> e != this && !(e instanceof BombEntity) && !(e instanceof AircraftEntity)).isEmpty();
+    }
+
+    private boolean hasSolidCollision(BlockPos pos) {
+        BlockState state = this.level().getBlockState(pos);
+        return !state.getCollisionShape(this.level(), pos).isEmpty();
+    }
+
+    private Entity resolveTarget() {
+        if (targetUUID == null || !(level() instanceof ServerLevel serverLevel)) {
+            return null;
+        }
+        return serverLevel.getEntity(targetUUID);
     }
 
     /** 爆炸处理 */
@@ -218,6 +302,9 @@ public class BombEntity extends Entity {
     @Override
     protected void readAdditionalSaveData(CompoundTag compound) {
         this.lifeTicks = compound.getInt("TickCount");
+        if (compound.hasUUID("TargetUUID")) {
+            this.targetUUID = compound.getUUID("TargetUUID");
+        }
         if (compound.contains("ExplosionRadius")) {
             this.setExplosionRadius(compound.getFloat("ExplosionRadius"));
         }
@@ -232,6 +319,9 @@ public class BombEntity extends Entity {
     @Override
     protected void addAdditionalSaveData(CompoundTag compound) {
         compound.putInt("TickCount", this.lifeTicks);
+        if (this.targetUUID != null) {
+            compound.putUUID("TargetUUID", this.targetUUID);
+        }
         compound.putFloat("ExplosionRadius", this.getExplosionRadius());
         compound.putFloat("Damage", this.getDamage());
         compound.putString("WeaponType", this.getWeaponType());

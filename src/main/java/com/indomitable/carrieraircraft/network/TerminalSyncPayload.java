@@ -30,7 +30,8 @@ import java.util.UUID;
 public record TerminalSyncPayload(
         List<AircraftData> aircraft,
         List<TargetData> targets,
-        Vec3 playerPos
+        Vec3 playerPos,
+        int forcedChunkCount
 ) implements CustomPacketPayload {
 
     public record AircraftData(UUID uuid, AircraftRole role, AircraftState state,
@@ -63,6 +64,7 @@ public record TerminalSyncPayload(
                             buf.writeDouble(t.z);
                             buf.writeBoolean(t.isEntity);
                         }
+                        buf.writeVarInt(pkt.forcedChunkCount);
                     },
                     buf -> {
                         double px = buf.readDouble();
@@ -89,7 +91,8 @@ public record TerminalSyncPayload(
                             boolean isEntity = buf.readBoolean();
                             targets.add(new TargetData(tx, tz, isEntity));
                         }
-                        return new TerminalSyncPayload(aircraft, targets, new Vec3(px, 0, pz));
+                        int forcedChunkCount = buf.readVarInt();
+                        return new TerminalSyncPayload(aircraft, targets, new Vec3(px, 0, pz), forcedChunkCount);
                     }
             );
 
@@ -125,7 +128,8 @@ public record TerminalSyncPayload(
             targets.add(new TargetData(pos.x, pos.z, t.isEntityTarget()));
         }
 
-        PacketDistributor.sendToPlayer(player, new TerminalSyncPayload(aircraft, targets, pp));
+        int forcedChunkCount = fm.getForcedChunkCount(player.getUUID());
+        PacketDistributor.sendToPlayer(player, new TerminalSyncPayload(aircraft, targets, pp, forcedChunkCount));
     }
 
     /**

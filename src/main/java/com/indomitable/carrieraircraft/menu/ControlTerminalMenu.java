@@ -67,12 +67,14 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
     @Nullable
     private UUID leaderUUID;
     private final java.util.Map<UUID, String> aircraftGroupMap = new java.util.HashMap<>();
+    private final List<String> groupNames = new ArrayList<>();
+    private int forcedChunkCount = 0;
 
     // ── 服务端构造 ──
 
     /** 在服务端打开控制终端 GUI。 */
     public static void open(ServerPlayer player) {
-        PlayerAirControlSettings settings = FireControlSystem.getInstance().settings(player.getUUID());
+        PlayerAirControlSettings settings = FireControlSystem.getInstance().settings(player.serverLevel(), player.getUUID());
         FormationManager fm = FormationManager.getInstance();
         FireControlSystem fcs = FireControlSystem.getInstance();
 
@@ -127,6 +129,12 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
                         String group = fm.getGroup(player.getUUID(), a.getUUID());
                         buf.writeUtf(group != null ? group : "");
                     }
+                    var names = fm.getGroupNames(player.getUUID());
+                    buf.writeVarInt(names.size());
+                    for (String name : names) {
+                        buf.writeUtf(name);
+                    }
+                    buf.writeVarInt(fm.getForcedChunkCount(player.getUUID()));
                 }
         );
     }
@@ -198,6 +206,11 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
                 aircraftGroupMap.put(aircraftList.get(i).uuid(), group);
             }
         }
+        int nameCount = buf.readVarInt();
+        for (int i = 0; i < nameCount; i++) {
+            groupNames.add(buf.readUtf());
+        }
+        forcedChunkCount = buf.readVarInt();
     }
 
     // ── 同步数据读取（客户端 GUI 用） ──
@@ -271,12 +284,15 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
         for (var t : payload.targets()) {
             this.targetList.add(new TargetInfo(new Vec3(t.x(), 0, t.z()), t.isEntity()));
         }
+        this.forcedChunkCount = payload.forcedChunkCount();
     }
 
     @Nullable
     public UUID leaderUUID() { return leaderUUID; }
     @Nullable
     public String aircraftGroup(UUID aircraftUUID) { return aircraftGroupMap.get(aircraftUUID); }
+    public List<String> groupNames() { return List.copyOf(groupNames); }
+    public int forcedChunkCount() { return forcedChunkCount; }
 
     @Nullable
     public Vec3 rallyPoint() { return rallyPoint; }

@@ -3,6 +3,7 @@ package com.indomitable.carrieraircraft.event;
 import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
 import com.indomitable.carrieraircraft.firecontrol.FireControlSystem;
 import com.indomitable.carrieraircraft.formation.FormationManager;
+import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
@@ -22,6 +23,9 @@ public class ServerGameEvents {
     @SubscribeEvent
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         UUID playerId = event.getEntity().getUUID();
+        if (event.getEntity() instanceof ServerPlayer player) {
+            FormationManager.getInstance().releaseForcedChunks(player.serverLevel(), playerId);
+        }
         FireControlSystem.getInstance().clearPlayer(playerId);
         FormationManager.getInstance().clearPlayer(playerId);
     }

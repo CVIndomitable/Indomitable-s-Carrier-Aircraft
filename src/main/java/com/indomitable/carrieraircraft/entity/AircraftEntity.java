@@ -24,6 +24,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.FlyingMob;
@@ -251,8 +253,9 @@ public class AircraftEntity extends FlyingMob {
             return;
         }
 
-        if (tickCount % 40 == 0) {
+        if (tickCount % 40 == 0 && level() instanceof ServerLevel serverLevel) {
             FormationManager.getInstance().registerAircraft(ownerUUID, this);
+            FormationManager.getInstance().updateLeaderChunkLoading(serverLevel, ownerUUID);
         }
 
         AircraftState currentState = getState();
@@ -283,7 +286,7 @@ public class AircraftEntity extends FlyingMob {
         Vec3 standbyPos = owner.position().add(0, spec.standbyHeight(), 0);
         hoverAround(standbyPos, 8.0);
 
-        if (hasSeaAmmo() && refreshTarget()) {
+        if (hasSeaAmmo() && readyForSortie() && refreshTarget()) {
             setState(AircraftState.LOCKED);
         }
     }
@@ -292,7 +295,7 @@ public class AircraftEntity extends FlyingMob {
         Vec3 center = orbitPoint;
         if (center == null) { setState(AircraftState.STANDBY); return; }
         hoverAround(center, 12.0);
-        if (hasSeaAmmo() && refreshTarget()) {
+        if (hasSeaAmmo() && readyForSortie() && refreshTarget()) {
             setState(AircraftState.LOCKED);
         }
     }
@@ -590,7 +593,19 @@ public class AircraftEntity extends FlyingMob {
         if (!(level() instanceof ServerLevel serverLevel)) return false;
         currentTarget = TargetingSubsystem.resolveTarget(this, serverLevel);
         if (currentTarget == null) { attackSolution = null; return false; }
+        if (!FormationManager.getInstance().shouldParticipate(this, currentTarget, serverLevel)) {
+            currentTarget = null;
+            attackSolution = null;
+            return false;
+        }
         return true;
+    }
+
+    private boolean readyForSortie() {
+        if (ownerUUID == null || !(level() instanceof ServerLevel serverLevel)) {
+            return true;
+        }
+        return FormationManager.getInstance().isReadyForSortie(serverLevel, ownerUUID, getUUID());
     }
 
     private void updateAttackSolution() {
@@ -610,7 +625,7 @@ public class AircraftEntity extends FlyingMob {
         if (!(level() instanceof ServerLevel serverLevel) || getState() == AircraftState.DOGFIGHT) return;
         if (!spec.canAttackAir() || airWeaponSlot.count() <= 0 || ownerUUID == null) return;
 
-        PlayerAirControlSettings settings = FireControlSystem.getInstance().settings(ownerUUID);
+        PlayerAirControlSettings settings = FireControlSystem.getInstance().settings(serverLevel, ownerUUID);
         AirDefenseMode defenseMode = settings.airDefenseMode();
         if (defenseMode == AirDefenseMode.LOW_AGGRESSION) return;
 
@@ -641,16 +656,10 @@ public class AircraftEntity extends FlyingMob {
         AABB box = getBoundingBox().inflate(spec.aswRange());
         Set<UUID> currentTargets = new HashSet<>();
         for (LivingEntity entity : serverLevel.getEntitiesOfClass(LivingEntity.class, box, this::isUnderwaterHostile)) {
-            entity.setGlowingTag(true);
+            entity.addEffect(new MobEffectInstance(MobEffects.GLOWING, 80, 0, false, false, true));
             currentTargets.add(entity.getUUID());
         }
-        // 清除不在范围内或已死亡的旧目标的发光
-        glowingTargets.removeIf(uuid -> {
-            if (currentTargets.contains(uuid)) return false;
-            Entity entity = serverLevel.getEntity(uuid);
-            if (entity instanceof LivingEntity living) living.setGlowingTag(false);
-            return true;
-        });
+        glowingTargets.removeIf(uuid -> !currentTargets.contains(uuid));
         glowingTargets.addAll(currentTargets);
     }
 
@@ -661,11 +670,6 @@ public class AircraftEntity extends FlyingMob {
 
     /** 清除所有被本机标记为发光的水下目标。 */
     private void clearAswGlow() {
-        if (glowingTargets.isEmpty() || !(level() instanceof ServerLevel serverLevel)) return;
-        for (UUID uuid : glowingTargets) {
-            Entity entity = serverLevel.getEntity(uuid);
-            if (entity instanceof LivingEntity living) living.setGlowingTag(false);
-        }
         glowingTargets.clear();
     }
 
@@ -685,7 +689,9 @@ public class AircraftEntity extends FlyingMob {
 
     private int calculateReleaseCount() {
         if (ownerUUID == null) return spec.burstSize();
-        PlayerAirControlSettings settings = FireControlSystem.getInstance().settings(ownerUUID);
+        PlayerAirControlSettings settings = level() instanceof ServerLevel serverLevel
+                ? FireControlSystem.getInstance().settings(serverLevel, ownerUUID)
+                : FireControlSystem.getInstance().settings(ownerUUID);
         float remainingNominalDamage = seaWeaponSlot.count() * spec.weaponDamage();
         if (remainingNominalDamage < settings.minimumEffectiveDamage()) return seaWeaponSlot.count();
         return Math.max(1, Math.min(settings.bombsPerPass(), spec.burstSize()));
@@ -703,15 +709,32 @@ public class AircraftEntity extends FlyingMob {
         Vec3 spawnPos = position().add(0, -1.0, 0).add(offset);
         Vec3 velocity = getDeltaMovement();
         AmmoType ammoType = seaWeaponSlot.ammoType();
+        String weaponType = ammoType.name();
+        UUID targetUUID = null;
 
         if (ammoType == AmmoType.AERIAL_TORPEDO) {
             velocity = attackSolution.attackDirection().scale(0.85).add(0, -0.08, 0);
         } else if (ammoType == AmmoType.ROCKET) {
             velocity = attackSolution.attackDirection().scale(1.7).add(0, -0.04, 0);
+        } else if (spec.seaAttackModes().contains(SeaAttackMode.DIVE_BOMBING)) {
+            weaponType = "GUIDED_BOMB";
+            if (level() instanceof ServerLevel serverLevel && currentTarget != null) {
+                Entity target = currentTarget.resolveEntity(serverLevel);
+                if (target != null && target.isAlive()) {
+                    targetUUID = target.getUUID();
+                }
+            }
+        } else if (spec.seaAttackModes().contains(SeaAttackMode.LEVEL_BOMBING)) {
+            double scatter = 0.035;
+            velocity = velocity.add(
+                    level().random.triangle(0.0, scatter),
+                    0.0,
+                    level().random.triangle(0.0, scatter)
+            );
         }
 
         BombEntity bomb = new BombEntity(level(), spawnPos, velocity,
-                spec.explosionRadius(), spec.weaponDamage(), ammoType.name());
+                spec.explosionRadius(), spec.weaponDamage(), weaponType, targetUUID);
         level().addFreshEntity(bomb);
     }
 
@@ -774,18 +797,26 @@ public class AircraftEntity extends FlyingMob {
         if (!(entity instanceof LivingEntity living) || !(entity instanceof Enemy)
                 || entity instanceof AircraftEntity) return false;
         if (spec.seaAttackModes().contains(SeaAttackMode.ASW_BOMBING)) return isUnderwaterHostile(living);
-        if (seaWeaponSlot.ammoType() == AmmoType.AERIAL_TORPEDO) return living.onGround() || living.isInWater();
+        if (seaWeaponSlot.ammoType() == AmmoType.AERIAL_TORPEDO) return isWaterTarget(living);
         return true;
     }
 
     public boolean preferredTargetType(Entity entity) {
         if (spec.seaAttackModes().contains(SeaAttackMode.ASW_BOMBING))
             return entity instanceof LivingEntity living && isUnderwaterHostile(living);
-        if (seaWeaponSlot.ammoType() == AmmoType.AERIAL_TORPEDO) return entity.isInWater() || entity.onGround();
+        if (seaWeaponSlot.ammoType() == AmmoType.AERIAL_TORPEDO) return isWaterTarget(entity);
         return true;
     }
 
-    private void reload(ServerPlayer owner) {
+    private boolean isWaterTarget(Entity entity) {
+        return entity.isInWaterOrBubble()
+                || level().getFluidState(entity.blockPosition()).is(net.minecraft.tags.FluidTags.WATER)
+                || level().getFluidState(entity.blockPosition().below()).is(net.minecraft.tags.FluidTags.WATER);
+    }
+
+    public boolean rearmFromInventory(ServerPlayer owner) {
+        int oldSea = seaWeaponSlot.count();
+        int oldAir = airWeaponSlot.count();
         if (owner.getAbilities().instabuild) {
             seaWeaponSlot.setCount(spec.seaAmmoCapacity());
             airWeaponSlot.setCount(spec.magazineCapacity());
@@ -794,6 +825,7 @@ public class AircraftEntity extends FlyingMob {
             restockFromInventory(airWeaponSlot, owner);
         }
         syncAmmoData();
+        return oldSea != seaWeaponSlot.count() || oldAir != airWeaponSlot.count();
     }
 
     private void restockFromInventory(WeaponSlot slot, ServerPlayer owner) {
@@ -802,9 +834,40 @@ public class AircraftEntity extends FlyingMob {
         for (int i = 0; i < inventory.getContainerSize() && slot.count() < slot.capacity(); i++) {
             ItemStack stack = inventory.getItem(i);
             if (!(stack.getItem() instanceof AviationAmmoItem ammo) || ammo.ammoType() != slot.ammoType()) continue;
+            if (ammo.ammoType() == AmmoType.MAGAZINE) {
+                restockMagazineFromStack(slot, ammo, stack, inventory);
+                continue;
+            }
             while (!stack.isEmpty() && slot.count() < slot.capacity()) {
                 slot.add(Math.max(1, ammo.rounds()));
                 stack.shrink(1);
+            }
+        }
+    }
+
+    private void restockMagazineFromStack(WeaponSlot slot, AviationAmmoItem ammo, ItemStack stack,
+                                          net.minecraft.world.entity.player.Inventory inventory) {
+        while (!stack.isEmpty() && slot.count() < slot.capacity()) {
+            int needed = slot.capacity() - slot.count();
+            int available = ammo.rounds(stack);
+            int taken = Math.min(needed, available);
+            slot.add(taken);
+            int remaining = available - taken;
+
+            if (remaining <= 0) {
+                stack.shrink(1);
+                if (!stack.isEmpty()) {
+                    stack.remove(ModDataComponents.MAGAZINE_ROUNDS);
+                }
+            } else if (stack.getCount() == 1) {
+                ammo.setMagazineRounds(stack, remaining);
+                return;
+            } else {
+                stack.shrink(1);
+                ItemStack partial = new ItemStack(stack.getItem());
+                ammo.setMagazineRounds(partial, remaining);
+                inventory.add(partial);
+                return;
             }
         }
     }
