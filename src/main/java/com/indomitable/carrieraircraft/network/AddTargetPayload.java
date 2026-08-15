@@ -3,7 +3,9 @@ package com.indomitable.carrieraircraft.network;
 import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
 import com.indomitable.carrieraircraft.firecontrol.FireControlSystem;
 import com.indomitable.carrieraircraft.firecontrol.FireControlTarget;
+import com.indomitable.carrieraircraft.menu.ControlTerminalMenu;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.StreamCodec;
@@ -48,8 +50,19 @@ public record AddTargetPayload(double x, double y, double z) implements CustomPa
     public static void handle(AddTargetPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             ServerPlayer player = (ServerPlayer) context.player();
+            if (!(player.containerMenu instanceof ControlTerminalMenu)
+                    || !player.containerMenu.stillValid(player)
+                    || !Double.isFinite(payload.x)
+                    || !Double.isFinite(payload.y)
+                    || !Double.isFinite(payload.z)) {
+                return;
+            }
             ServerLevel level = player.serverLevel();
             Vec3 pos = new Vec3(payload.x, payload.y, payload.z);
+            if (!level.getWorldBorder().isWithinBounds(BlockPos.containing(pos))) {
+                player.sendSystemMessage(Component.literal("目标坐标超出世界边界").withStyle(ChatFormatting.RED));
+                return;
+            }
 
             // 检查方块目标附近 1 格内是否有实体
             FireControlTarget target = findNearbyEntityOrPosition(level, player, pos);

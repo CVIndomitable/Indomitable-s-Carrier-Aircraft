@@ -7,6 +7,7 @@ import com.indomitable.carrieraircraft.network.AddTargetPayload;
 import com.indomitable.carrieraircraft.network.CommandPayload;
 import com.indomitable.carrieraircraft.network.DebugCommandPayload;
 import com.indomitable.carrieraircraft.network.FormationCommandPayload;
+import com.indomitable.carrieraircraft.network.ManageTargetsPayload;
 import com.indomitable.carrieraircraft.network.TerminalSyncPayload;
 import com.indomitable.carrieraircraft.registry.ModEntityTypes;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -64,6 +65,11 @@ public class CommonModEvents {
                 AddTargetPayload.TYPE,
                 AddTargetPayload.CODEC,
                 AddTargetPayload::handle
+        );
+        registrar.playToServer(
+                ManageTargetsPayload.TYPE,
+                ManageTargetsPayload.CODEC,
+                ManageTargetsPayload::handle
         );
 
         // 服务端 → 客户端

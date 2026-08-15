@@ -4,9 +4,12 @@ import com.indomitable.carrieraircraft.aircraft.SquadronType;
 import com.indomitable.carrieraircraft.data.CarrierAircraftSavedData;
 import com.indomitable.carrieraircraft.entity.AircraftEntity;
 import com.indomitable.carrieraircraft.firecontrol.FireControlTarget;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
@@ -28,8 +31,10 @@ public final class FormationManager {
     private final Map<UUID, UUID> leaderAircraft = new HashMap<>();
     private final Map<UUID, Map<UUID, String>> aircraftGroups = new HashMap<>();
     private final Map<UUID, Set<String>> groupNames = new HashMap<>();
-    private final Map<UUID, Set<Long>> forcedLeaderChunks = new HashMap<>();
+    private final Map<UUID, ForcedChunkRecord> forcedLeaderChunks = new HashMap<>();
     private final Set<UUID> loadedPlayers = new HashSet<>();
+
+    private record ForcedChunkRecord(ResourceKey<Level> dimension, Set<Long> chunks) {}
 
     private FormationManager() {}
 
@@ -111,7 +116,9 @@ public final class FormationManager {
     public AircraftEntity getLeader(ServerLevel level, UUID ownerId) {
         loadPlayerData(level, ownerId);
         UUID leaderId = leaderAircraft.get(ownerId);
-        if (leaderId != null && level.getEntity(leaderId) instanceof AircraftEntity leader && leader.isAlive()) {
+        if (leaderId != null && level.getEntity(leaderId) instanceof AircraftEntity leader
+                && leader.isAlive()
+                && ownerId.equals(leader.getOwnerUUID())) {
             return leader;
         }
 
@@ -258,7 +265,20 @@ public final class FormationManager {
             }
         }
 
-        Set<Long> previous = forcedLeaderChunks.computeIfAbsent(ownerId, id -> new HashSet<>());
+        ResourceKey<Level> dimension = level.dimension();
+        ForcedChunkRecord record = forcedLeaderChunks.get(ownerId);
+        if (record != null && !record.dimension().equals(dimension)) {
+            releaseForcedChunks(level.getServer(), record);
+            record = null;
+        }
+
+        Set<Long> previous;
+        if (record == null) {
+            previous = new HashSet<>();
+            forcedLeaderChunks.put(ownerId, new ForcedChunkRecord(dimension, previous));
+        } else {
+            previous = record.chunks();
+        }
         for (Long packed : new HashSet<>(previous)) {
             if (!desired.contains(packed)) {
                 level.setChunkForced(chunkX(packed), chunkZ(packed), false);
@@ -273,15 +293,31 @@ public final class FormationManager {
     }
 
     public int getForcedChunkCount(UUID ownerId) {
-        return forcedLeaderChunks.getOrDefault(ownerId, Set.of()).size();
+        ForcedChunkRecord record = forcedLeaderChunks.get(ownerId);
+        return record == null ? 0 : record.chunks().size();
     }
 
     public void releaseForcedChunks(ServerLevel level, UUID ownerId) {
-        Set<Long> chunks = forcedLeaderChunks.remove(ownerId);
-        if (chunks == null) {
+        ForcedChunkRecord record = forcedLeaderChunks.remove(ownerId);
+        if (record == null) {
             return;
         }
-        for (Long packed : chunks) {
+        releaseForcedChunks(level.getServer(), record);
+    }
+
+    public void releaseAllForcedChunks(MinecraftServer server) {
+        for (ForcedChunkRecord record : forcedLeaderChunks.values()) {
+            releaseForcedChunks(server, record);
+        }
+        forcedLeaderChunks.clear();
+    }
+
+    private void releaseForcedChunks(MinecraftServer server, ForcedChunkRecord record) {
+        ServerLevel level = server.getLevel(record.dimension());
+        if (level == null) {
+            return;
+        }
+        for (Long packed : record.chunks()) {
             level.setChunkForced(chunkX(packed), chunkZ(packed), false);
         }
     }

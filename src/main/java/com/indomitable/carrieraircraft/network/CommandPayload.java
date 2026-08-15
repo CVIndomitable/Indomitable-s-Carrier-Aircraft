@@ -5,6 +5,7 @@ import com.indomitable.carrieraircraft.aircraft.AirDefenseMode;
 import com.indomitable.carrieraircraft.aircraft.AssignmentMode;
 import com.indomitable.carrieraircraft.aircraft.AutoLockMode;
 import com.indomitable.carrieraircraft.entity.AircraftEntity;
+import com.indomitable.carrieraircraft.firecontrol.CameraStateTracker;
 import com.indomitable.carrieraircraft.firecontrol.FireControlSystem;
 import com.indomitable.carrieraircraft.firecontrol.PlayerAirControlSettings;
 import com.indomitable.carrieraircraft.formation.FormationManager;
@@ -78,8 +79,16 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
     public static void handle(CommandPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             ServerPlayer player = (ServerPlayer) context.player();
+            if (!hasOpenTerminal(player)) {
+                return;
+            }
             executeAction(player, payload.action);
         });
+    }
+
+    private static boolean hasOpenTerminal(ServerPlayer player) {
+        return player.containerMenu instanceof ControlTerminalMenu
+                && player.containerMenu.stillValid(player);
     }
 
     private static void executeAction(ServerPlayer player, byte action) {
@@ -125,10 +134,7 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
                 player.sendSystemMessage(Component.literal("已补给 " + count + " 架飞机").withStyle(ChatFormatting.AQUA));
             }
             case ENTER_LEADER_CAMERA -> enterLeaderCamera(player);
-            case EXIT_LEADER_CAMERA -> {
-                player.setCamera(player);
-                player.sendSystemMessage(Component.literal("已切回玩家视角").withStyle(ChatFormatting.YELLOW));
-            }
+            case EXIT_LEADER_CAMERA -> exitLeaderCamera(player);
             // ── 直接设置（下拉菜单）──
             case SET_AUTO_LOCK_NEAREST -> setAutoLock(player, settings, AutoLockMode.NEAREST);
             case SET_AUTO_LOCK_STRONGEST -> setAutoLock(player, settings, AutoLockMode.STRONGEST);
@@ -182,7 +188,14 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
             player.sendSystemMessage(Component.literal("当前没有可用长机").withStyle(ChatFormatting.RED));
             return;
         }
+        CameraStateTracker.getInstance().enterLeaderCamera(player);
         player.setCamera(leader);
         player.sendSystemMessage(Component.literal("已切入长机视角，使用终端切回玩家视角").withStyle(ChatFormatting.AQUA));
+    }
+
+    private static void exitLeaderCamera(ServerPlayer player) {
+        CameraStateTracker.getInstance().exitLeaderCamera(player);
+        player.setCamera(player);
+        player.sendSystemMessage(Component.literal("已切回玩家视角").withStyle(ChatFormatting.YELLOW));
     }
 }

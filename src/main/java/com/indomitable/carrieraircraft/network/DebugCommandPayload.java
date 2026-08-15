@@ -4,6 +4,7 @@ import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
 import com.indomitable.carrieraircraft.entity.AircraftEntity;
 import com.indomitable.carrieraircraft.entity.ai.AircraftState;
 import com.indomitable.carrieraircraft.formation.FormationManager;
+import com.indomitable.carrieraircraft.menu.DebugMenu;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -68,8 +69,17 @@ public record DebugCommandPayload(
     public static void handle(DebugCommandPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             ServerPlayer player = (ServerPlayer) context.player();
+            if (!canUseDebugCommands(player)) {
+                return;
+            }
             executeAction(player, payload);
         });
+    }
+
+    private static boolean canUseDebugCommands(ServerPlayer player) {
+        return player.getAbilities().instabuild
+                && player.containerMenu instanceof DebugMenu
+                && player.containerMenu.stillValid(player);
     }
 
     private static void executeAction(ServerPlayer player, DebugCommandPayload pkt) {
@@ -81,6 +91,9 @@ public record DebugCommandPayload(
                 a.debugStop();
             }
             player.sendSystemMessage(Component.literal("已停止所有调试").withStyle(ChatFormatting.YELLOW));
+            return;
+        }
+        if (pkt.action != EXECUTE) {
             return;
         }
 
@@ -98,6 +111,11 @@ public record DebugCommandPayload(
         }
 
         AircraftState state = states[pkt.stateOrdinal];
+        if (!Double.isFinite(pkt.startX) || !Double.isFinite(pkt.startY) || !Double.isFinite(pkt.startZ)
+                || !Double.isFinite(pkt.targetX) || !Double.isFinite(pkt.targetY) || !Double.isFinite(pkt.targetZ)) {
+            player.sendSystemMessage(Component.literal("无效的调试坐标").withStyle(ChatFormatting.RED));
+            return;
+        }
         Vec3 startPos = new Vec3(pkt.startX, pkt.startY, pkt.startZ);
         Vec3 targetPos = new Vec3(pkt.targetX, pkt.targetY, pkt.targetZ);
 

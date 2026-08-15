@@ -84,6 +84,7 @@ public class AircraftSpawnerItem extends Item {
             Integer seaAmmo = stack.get(ModDataComponents.SEA_AMMO_COUNT);
             Integer airAmmo = stack.get(ModDataComponents.AIR_AMMO_COUNT);
             if (seaAmmo != null) aircraft.setAmmoCount(seaAmmo);
+            if (airAmmo != null) aircraft.setAirAmmoCount(airAmmo);
 
             // 如果玩家已有锁定目标，立即分配给飞机
             Vec3 target = FireControlSystem.getInstance().getTarget(player.getUUID());
@@ -92,8 +93,9 @@ public class AircraftSpawnerItem extends Item {
             boolean success = level.addFreshEntity(aircraft);
 
             if (success) {
-                String label = seaAmmo != null
-                        ? String.format("已放飞 %s（对海 %d，对空 %d）", role.displayName(), seaAmmo, airAmmo)
+                String label = seaAmmo != null || airAmmo != null
+                        ? String.format("已放飞 %s（对海 %d，对空 %d）",
+                                role.displayName(), aircraft.getAmmoCount(), aircraft.getAirAmmoCount())
                         : "已放飞" + role.displayName();
                 player.sendSystemMessage(Component.literal(label).withStyle(ChatFormatting.GREEN));
                 com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info(

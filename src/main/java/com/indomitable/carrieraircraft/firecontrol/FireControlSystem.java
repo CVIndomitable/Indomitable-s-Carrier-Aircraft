@@ -164,6 +164,25 @@ public class FireControlSystem {
         targetMap.remove(playerUUID);
     }
 
+    /**
+     * 删除指定索引的目标。
+     *
+     * @param playerUUID 玩家 UUID
+     * @param index 目标索引（0-based）
+     * @return 是否成功删除
+     */
+    public boolean removeTarget(UUID playerUUID, int index) {
+        List<FireControlTarget> targets = targetMap.get(playerUUID);
+        if (targets == null || index < 0 || index >= targets.size()) {
+            return false;
+        }
+        targets.remove(index);
+        if (targets.isEmpty()) {
+            targetMap.remove(playerUUID);
+        }
+        return true;
+    }
+
     public void clearAll() {
         targetMap.clear();
         settingsMap.clear();

@@ -31,11 +31,14 @@ public record TerminalSyncPayload(
         List<AircraftData> aircraft,
         List<TargetData> targets,
         Vec3 playerPos,
-        int forcedChunkCount
+        int forcedChunkCount,
+        UUID leaderUUID,
+        List<String> groupNames
 ) implements CustomPacketPayload {
 
     public record AircraftData(UUID uuid, AircraftRole role, AircraftState state,
-                               int seaAmmo, int airAmmo, double x, double z) {}
+                               int seaAmmo, int airAmmo, double x, double z,
+                               String group) {}
 
     public record TargetData(double x, double z, boolean isEntity) {}
 
@@ -57,6 +60,7 @@ public record TerminalSyncPayload(
                             buf.writeVarInt(a.airAmmo);
                             buf.writeDouble(a.x);
                             buf.writeDouble(a.z);
+                            buf.writeUtf(a.group != null ? a.group : "");
                         }
                         buf.writeVarInt(pkt.targets.size());
                         for (var t : pkt.targets) {
@@ -65,6 +69,14 @@ public record TerminalSyncPayload(
                             buf.writeBoolean(t.isEntity);
                         }
                         buf.writeVarInt(pkt.forcedChunkCount);
+                        buf.writeBoolean(pkt.leaderUUID != null);
+                        if (pkt.leaderUUID != null) {
+                            buf.writeUUID(pkt.leaderUUID);
+                        }
+                        buf.writeVarInt(pkt.groupNames.size());
+                        for (String name : pkt.groupNames) {
+                            buf.writeUtf(name);
+                        }
                     },
                     buf -> {
                         double px = buf.readDouble();
@@ -81,7 +93,9 @@ public record TerminalSyncPayload(
                             int airAmmo = buf.readVarInt();
                             double ax = buf.readDouble();
                             double az = buf.readDouble();
-                            aircraft.add(new AircraftData(uuid, role, state, seaAmmo, airAmmo, ax, az));
+                            String group = buf.readUtf();
+                            aircraft.add(new AircraftData(uuid, role, state, seaAmmo, airAmmo, ax, az,
+                                    group.isEmpty() ? null : group));
                         }
                         List<TargetData> targets = new ArrayList<>();
                         int tCount = buf.readVarInt();
@@ -92,7 +106,14 @@ public record TerminalSyncPayload(
                             targets.add(new TargetData(tx, tz, isEntity));
                         }
                         int forcedChunkCount = buf.readVarInt();
-                        return new TerminalSyncPayload(aircraft, targets, new Vec3(px, 0, pz), forcedChunkCount);
+                        UUID leaderUUID = buf.readBoolean() ? buf.readUUID() : null;
+                        int gnCount = buf.readVarInt();
+                        List<String> groupNames = new ArrayList<>(gnCount);
+                        for (int i = 0; i < gnCount; i++) {
+                            groupNames.add(buf.readUtf());
+                        }
+                        return new TerminalSyncPayload(aircraft, targets, new Vec3(px, 0, pz),
+                                forcedChunkCount, leaderUUID, groupNames);
                     }
             );
 
@@ -114,10 +135,11 @@ public record TerminalSyncPayload(
         var aircraftEntities = fm.getAircraft(level, player.getUUID());
         List<AircraftData> aircraft = new ArrayList<>(aircraftEntities.size());
         for (var a : aircraftEntities) {
+            String group = fm.getGroup(player.getUUID(), a.getUUID());
             aircraft.add(new AircraftData(
                     a.getUUID(), a.getRole(), a.getState(),
                     a.getAmmoCount(), a.getAirAmmoCount(),
-                    a.getX(), a.getZ()
+                    a.getX(), a.getZ(), group
             ));
         }
 
@@ -129,7 +151,11 @@ public record TerminalSyncPayload(
         }
 
         int forcedChunkCount = fm.getForcedChunkCount(player.getUUID());
-        PacketDistributor.sendToPlayer(player, new TerminalSyncPayload(aircraft, targets, pp, forcedChunkCount));
+        UUID leaderUUID = fm.getLeaderUUID(player.getUUID());
+        List<String> groupNames = fm.getGroupNames(player.getUUID());
+
+        PacketDistributor.sendToPlayer(player, new TerminalSyncPayload(
+                aircraft, targets, pp, forcedChunkCount, leaderUUID, groupNames));
     }
 
     /**

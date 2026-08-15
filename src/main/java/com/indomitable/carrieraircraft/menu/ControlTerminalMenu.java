@@ -7,6 +7,7 @@ import com.indomitable.carrieraircraft.firecontrol.PlayerAirControlSettings;
 import com.indomitable.carrieraircraft.formation.FormationManager;
 import com.indomitable.carrieraircraft.network.TerminalSyncPayload;
 import com.indomitable.carrieraircraft.registry.ModMenuTypes;
+import com.indomitable.carrieraircraft.registry.ModItems;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -273,18 +274,25 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
     public void syncFromServer(TerminalSyncPayload payload) {
         this.playerPosition = payload.playerPos();
         this.aircraftList.clear();
+        this.aircraftGroupMap.clear();
         for (var a : payload.aircraft()) {
             this.aircraftList.add(new AircraftInfo(
                     a.uuid(), a.role(), a.state(),
                     a.seaAmmo(), a.airAmmo(),
                     new Vec3(a.x(), 0, a.z())
             ));
+            if (a.group() != null) {
+                this.aircraftGroupMap.put(a.uuid(), a.group());
+            }
         }
         this.targetList.clear();
         for (var t : payload.targets()) {
             this.targetList.add(new TargetInfo(new Vec3(t.x(), 0, t.z()), t.isEntity()));
         }
         this.forcedChunkCount = payload.forcedChunkCount();
+        this.leaderUUID = payload.leaderUUID();
+        this.groupNames.clear();
+        this.groupNames.addAll(payload.groupNames());
     }
 
     @Nullable
@@ -306,6 +314,8 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
 
     @Override
     public boolean stillValid(Player player) {
-        return true;
+        return player.isAlive()
+                && (player.getMainHandItem().is(ModItems.CONTROL_TERMINAL.get())
+                || player.getOffhandItem().is(ModItems.CONTROL_TERMINAL.get()));
     }
 }

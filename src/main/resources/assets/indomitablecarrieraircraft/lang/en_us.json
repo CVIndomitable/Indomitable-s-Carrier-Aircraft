@@ -17,12 +17,15 @@
   "tooltip.indomitablecarrieraircraft.ammo_type": "Ammo type: %s",
   "tooltip.indomitablecarrieraircraft.nominal_damage": "Nominal damage: %s",
   "tooltip.indomitablecarrieraircraft.rounds": "Rounds: %s",
-  "tooltip.indomitablecarrieraircraft.control_terminal.line1": "Right-click: open control panel",
-  "tooltip.indomitablecarrieraircraft.control_terminal.line2": "Sneak + main hand: quick lock target",
+  "tooltip.indomitablecarrieraircraft.control_terminal.line1": "Left-click entity: lock target",
+  "tooltip.indomitablecarrieraircraft.control_terminal.line2": "Right-click: open panel | Shift+right-click: lock position",
   "tooltip.indomitablecarrieraircraft.control_terminal.line3": "Drop: recall all aircraft",
   "container.indomitablecarrieraircraft.control_terminal": "Carrier Aircraft Control Terminal",
   "item.indomitablecarrieraircraft.debug_tool": "Aircraft Debug Tool",
   "container.indomitablecarrieraircraft.debug": "Aircraft State Debug",
   "tooltip.indomitablecarrieraircraft.debug_tool.line1": "Right-click: open debug panel",
-  "tooltip.indomitablecarrieraircraft.debug_tool.line2": "Creative mode only"
+  "tooltip.indomitablecarrieraircraft.debug_tool.line2": "Creative mode only",
+  "message.indomitablecarrieraircraft.weapon_hit": "%s Hit %s",
+  "message.indomitablecarrieraircraft.weapon_kill": "%s Killed %s",
+  "entity.indomitablecarrieraircraft.aircraft": "Carrier Aircraft"
 }

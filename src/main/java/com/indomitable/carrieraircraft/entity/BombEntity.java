@@ -1,8 +1,10 @@
 package com.indomitable.carrieraircraft.entity;
 
+import com.indomitable.carrieraircraft.combat.HitNotifier;
 import com.indomitable.carrieraircraft.registry.ModEntityTypes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
@@ -11,6 +13,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ExplosionDamageCalculator;
 import net.minecraft.world.level.SimpleExplosionDamageCalculator;
@@ -62,6 +65,15 @@ public class BombEntity extends Entity {
 
     /** 制导弹使用的目标实体。只需服务端保存，客户端跟随实体同步即可。 */
     private UUID targetUUID;
+
+    /** 投弹的飞机名称，用于反馈消息 */
+    private Component sourceAircraftName;
+
+    /** 投弹的飞机 UUID，用于伤害来源 */
+    private UUID sourceAircraftUUID;
+
+    /** 弹药所有者（玩家），用于反馈消息 */
+    private UUID ownerUUID;
 
     public BombEntity(EntityType<? extends BombEntity> entityType, Level level) {
         super(entityType, level);
@@ -239,6 +251,15 @@ public class BombEntity extends Entity {
         float radius = this.getExplosionRadius();
         float damage = this.getDamage();
 
+        // 获取玩家所有者
+        Player player = null;
+        if (ownerUUID != null && level() instanceof ServerLevel serverLevel) {
+            Entity ownerEntity = serverLevel.getEntity(ownerUUID);
+            if (ownerEntity instanceof Player p) {
+                player = p;
+            }
+        }
+
         AABB damageBox = this.getBoundingBox().inflate(radius);
         for (LivingEntity target : this.level().getEntitiesOfClass(LivingEntity.class, damageBox, LivingEntity::isAlive)) {
             if (target instanceof AircraftEntity) {
@@ -252,7 +273,25 @@ public class BombEntity extends Entity {
             if (scaledDamage <= 0.0F) {
                 continue;
             }
-            target.hurt(this.damageSources().explosion(this, null), scaledDamage);
+
+            // 记录伤害前的状态
+            boolean wasAlive = target.isAlive();
+
+            // 应用伤害
+            Entity damageSource = this;
+            if (sourceAircraftUUID != null && level() instanceof ServerLevel sl) {
+                Entity aircraft = sl.getEntity(sourceAircraftUUID);
+                if (aircraft != null) {
+                    damageSource = aircraft;
+                }
+            }
+            target.hurt(this.damageSources().explosion(damageSource, ownerUUID != null && level() instanceof ServerLevel sl ? sl.getEntity(ownerUUID) : null), scaledDamage);
+
+            // 命中反馈
+            if (player != null && wasAlive) {
+                boolean killed = !target.isAlive() || target.getHealth() <= 0.0F;
+                notifyOwner(player, target, killed);
+            }
         }
 
         // 爆炸只负责方块破坏、视效与击退；MOB 模式受 mobGriefing 游戏规则约束
@@ -269,6 +308,25 @@ public class BombEntity extends Entity {
         );
 
         this.discard();
+    }
+
+    /**
+     * 向玩家发送命中/击杀反馈消息。
+     *
+     * @param player 玩家
+     * @param target 被命中的目标
+     * @param killed 是否击杀
+     */
+    private void notifyOwner(Player player, Entity target, boolean killed) {
+        Component weaponName = sourceAircraftName != null
+                ? sourceAircraftName
+                : Component.translatable("entity.indomitablecarrieraircraft.aircraft");
+
+        String key = killed
+                ? "message.indomitablecarrieraircraft.weapon_kill"
+                : "message.indomitablecarrieraircraft.weapon_hit";
+
+        HitNotifier.send(player, Component.translatable(key, weaponName, target.getDisplayName()));
     }
 
     // ==================== Getter/Setter ====================
@@ -297,6 +355,45 @@ public class BombEntity extends Entity {
         this.entityData.set(DATA_WEAPON_TYPE, weaponType);
     }
 
+    /**
+     * 设置投弹飞机的名称（用于反馈消息）。
+     *
+     * @param name 飞机名称
+     */
+    public void setSourceAircraftName(Component name) {
+        this.sourceAircraftName = name;
+    }
+
+    /**
+     * 设置投弹飞机的 UUID（用于伤害来源）。
+     *
+     * @param aircraftUUID 飞机 UUID
+     */
+    public void setSourceAircraftUUID(UUID aircraftUUID) {
+        this.sourceAircraftUUID = aircraftUUID;
+    }
+
+    /**
+     * 便捷方法：同时设置飞机实体的名称和 UUID。
+     *
+     * @param aircraft 飞机实体
+     */
+    public void setSourceAircraft(Entity aircraft) {
+        this.sourceAircraftUUID = aircraft.getUUID();
+        this.sourceAircraftName = aircraft.getDisplayName();
+    }
+
+    /**
+     * 设置弹药所有者（玩家）。
+     *
+     * @param owner 所有者实体
+     */
+    public void setOwner(Entity owner) {
+        if (owner != null) {
+            this.ownerUUID = owner.getUUID();
+        }
+    }
+
     // ==================== NBT 序列化 ====================
 
     @Override
@@ -304,6 +401,21 @@ public class BombEntity extends Entity {
         this.lifeTicks = compound.getInt("TickCount");
         if (compound.hasUUID("TargetUUID")) {
             this.targetUUID = compound.getUUID("TargetUUID");
+        }
+        if (compound.hasUUID("SourceAircraftUUID")) {
+            this.sourceAircraftUUID = compound.getUUID("SourceAircraftUUID");
+        }
+        if (compound.hasUUID("OwnerUUID")) {
+            this.ownerUUID = compound.getUUID("OwnerUUID");
+        }
+        if (compound.contains("SourceAircraftName")) {
+            try {
+                this.sourceAircraftName = Component.Serializer.fromJson(
+                        compound.getString("SourceAircraftName"), registryAccess());
+            } catch (Exception e) {
+                // 解析失败时使用默认名称
+                this.sourceAircraftName = null;
+            }
         }
         if (compound.contains("ExplosionRadius")) {
             this.setExplosionRadius(compound.getFloat("ExplosionRadius"));
@@ -321,6 +433,16 @@ public class BombEntity extends Entity {
         compound.putInt("TickCount", this.lifeTicks);
         if (this.targetUUID != null) {
             compound.putUUID("TargetUUID", this.targetUUID);
+        }
+        if (this.sourceAircraftUUID != null) {
+            compound.putUUID("SourceAircraftUUID", this.sourceAircraftUUID);
+        }
+        if (this.ownerUUID != null) {
+            compound.putUUID("OwnerUUID", this.ownerUUID);
+        }
+        if (this.sourceAircraftName != null) {
+            compound.putString("SourceAircraftName",
+                    Component.Serializer.toJson(this.sourceAircraftName, registryAccess()));
         }
         compound.putFloat("ExplosionRadius", this.getExplosionRadius());
         compound.putFloat("Damage", this.getDamage());

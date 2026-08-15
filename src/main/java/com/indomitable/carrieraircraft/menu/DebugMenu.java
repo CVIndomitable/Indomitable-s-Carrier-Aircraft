@@ -3,6 +3,7 @@ package com.indomitable.carrieraircraft.menu;
 import com.indomitable.carrieraircraft.aircraft.AircraftRole;
 import com.indomitable.carrieraircraft.entity.ai.AircraftState;
 import com.indomitable.carrieraircraft.formation.FormationManager;
+import com.indomitable.carrieraircraft.registry.ModItems;
 import com.indomitable.carrieraircraft.registry.ModMenuTypes;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -93,6 +94,9 @@ public class DebugMenu extends AbstractContainerMenu {
 
     @Override
     public boolean stillValid(Player player) {
-        return true;
+        return player.isAlive()
+                && player.getAbilities().instabuild
+                && (player.getMainHandItem().is(ModItems.DEBUG_TOOL.get())
+                || player.getOffhandItem().is(ModItems.DEBUG_TOOL.get()));
     }
 }

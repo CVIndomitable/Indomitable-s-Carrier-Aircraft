@@ -17,12 +17,15 @@
   "tooltip.indomitablecarrieraircraft.ammo_type": "弹药类型：%s",
   "tooltip.indomitablecarrieraircraft.nominal_damage": "标称伤害：%s",
   "tooltip.indomitablecarrieraircraft.rounds": "载弹/发数：%s",
-  "tooltip.indomitablecarrieraircraft.control_terminal.line1": "右键：打开控制面板",
-  "tooltip.indomitablecarrieraircraft.control_terminal.line2": "潜行+主手：快速锁定目标",
+  "tooltip.indomitablecarrieraircraft.control_terminal.line1": "左键实体：锁定目标",
+  "tooltip.indomitablecarrieraircraft.control_terminal.line2": "右键：打开面板 | Shift+右键：锁定坐标",
   "tooltip.indomitablecarrieraircraft.control_terminal.line3": "丢弃：召回所有飞机",
   "container.indomitablecarrieraircraft.control_terminal": "舰载机控制终端",
   "item.indomitablecarrieraircraft.debug_tool": "飞机调试工具",
   "container.indomitablecarrieraircraft.debug": "飞机状态调试",
   "tooltip.indomitablecarrieraircraft.debug_tool.line1": "右键：打开调试面板",
-  "tooltip.indomitablecarrieraircraft.debug_tool.line2": "仅创造模式可用"
+  "tooltip.indomitablecarrieraircraft.debug_tool.line2": "仅创造模式可用",
+  "message.indomitablecarrieraircraft.weapon_hit": "%s 命中 %s",
+  "message.indomitablecarrieraircraft.weapon_kill": "%s 击杀 %s",
+  "entity.indomitablecarrieraircraft.aircraft": "舰载机"
 }

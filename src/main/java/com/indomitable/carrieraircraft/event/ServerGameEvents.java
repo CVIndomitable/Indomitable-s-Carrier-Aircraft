@@ -1,6 +1,8 @@
 package com.indomitable.carrieraircraft.event;
 
 import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
+import com.indomitable.carrieraircraft.combat.HitNotifier;
+import com.indomitable.carrieraircraft.firecontrol.CameraStateTracker;
 import com.indomitable.carrieraircraft.firecontrol.FireControlSystem;
 import com.indomitable.carrieraircraft.formation.FormationManager;
 import net.minecraft.server.level.ServerPlayer;
@@ -28,11 +30,14 @@ public class ServerGameEvents {
         }
         FireControlSystem.getInstance().clearPlayer(playerId);
         FormationManager.getInstance().clearPlayer(playerId);
+        HitNotifier.onPlayerLogout(playerId);
+        CameraStateTracker.getInstance().clearPlayer(playerId);
     }
 
     @SubscribeEvent
     public static void onServerStopped(ServerStoppedEvent event) {
         FireControlSystem.getInstance().clearAll();
+        FormationManager.getInstance().releaseAllForcedChunks(event.getServer());
         FormationManager.getInstance().clear();
     }
 }

@@ -3,6 +3,7 @@ package com.indomitable.carrieraircraft.network;
 import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
 import com.indomitable.carrieraircraft.entity.AircraftEntity;
 import com.indomitable.carrieraircraft.formation.FormationManager;
+import com.indomitable.carrieraircraft.menu.ControlTerminalMenu;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -32,6 +33,7 @@ public record FormationCommandPayload(byte action, UUID aircraftUUID,
     public static final byte ADD_TO_GROUP = 1;
     public static final byte REMOVE_FROM_GROUP = 2;
     public static final byte CREATE_GROUP = 3;
+    private static final int MAX_GROUP_NAME_LENGTH = 32;
 
     public static final Type<FormationCommandPayload> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(
@@ -42,10 +44,10 @@ public record FormationCommandPayload(byte action, UUID aircraftUUID,
                     (buf, pkt) -> {
                         buf.writeByte(pkt.action);
                         buf.writeUUID(pkt.aircraftUUID);
-                        buf.writeUtf(pkt.parameter);
+                        buf.writeUtf(pkt.parameter, MAX_GROUP_NAME_LENGTH);
                     },
                     buf -> new FormationCommandPayload(
-                            buf.readByte(), buf.readUUID(), buf.readUtf())
+                            buf.readByte(), buf.readUUID(), buf.readUtf(MAX_GROUP_NAME_LENGTH))
             );
 
     @Override
@@ -56,11 +58,16 @@ public record FormationCommandPayload(byte action, UUID aircraftUUID,
     public static void handle(FormationCommandPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             ServerPlayer player = (ServerPlayer) context.player();
+            if (!(player.containerMenu instanceof ControlTerminalMenu)
+                    || !player.containerMenu.stillValid(player)) {
+                return;
+            }
             FormationManager fm = FormationManager.getInstance();
+            String parameter = normalizeParameter(payload.parameter);
 
             switch (payload.action) {
                 case SET_LEADER -> {
-                    AircraftEntity aircraft = resolveAircraft(player, payload.aircraftUUID);
+                    AircraftEntity aircraft = resolveOwnedAircraft(player, payload.aircraftUUID);
                     if (aircraft == null) return;
                     UUID currentLeader = fm.getLeaderUUID(player.getUUID());
                     if (payload.aircraftUUID.equals(currentLeader)) {
@@ -77,52 +84,58 @@ public record FormationCommandPayload(byte action, UUID aircraftUUID,
                     }
                 }
                 case ADD_TO_GROUP -> {
-                    if (payload.parameter.isEmpty()) {
+                    if (parameter.isEmpty()) {
                         player.sendSystemMessage(
                                 Component.literal("未指定编组").withStyle(ChatFormatting.RED));
                         return;
                     }
-                    AircraftEntity aircraft = resolveAircraft(player, payload.aircraftUUID);
+                    AircraftEntity aircraft = resolveOwnedAircraft(player, payload.aircraftUUID);
                     if (aircraft == null) return;
-                    fm.addToGroup(player.getUUID(), payload.aircraftUUID, payload.parameter);
+                    fm.addToGroup(player.getUUID(), payload.aircraftUUID, parameter);
                     fm.savePlayerData(player.serverLevel(), player.getUUID());
                     player.sendSystemMessage(Component.literal(
                             String.format("已将 %s 加入编组 [%s]",
-                                    aircraft.getRole().displayName(), payload.parameter))
+                                    aircraft.getRole().displayName(), parameter))
                             .withStyle(ChatFormatting.GREEN));
                 }
                 case REMOVE_FROM_GROUP -> {
+                    AircraftEntity aircraft = resolveOwnedAircraft(player, payload.aircraftUUID);
+                    if (aircraft == null) return;
                     fm.removeFromGroup(player.getUUID(), payload.aircraftUUID);
                     fm.savePlayerData(player.serverLevel(), player.getUUID());
-                    AircraftEntity aircraft = resolveAircraft(player, payload.aircraftUUID);
-                    String name = aircraft != null ? aircraft.getRole().displayName() : "飞机";
                     player.sendSystemMessage(
-                            Component.literal("已将 " + name + " 移出编组")
+                            Component.literal("已将 " + aircraft.getRole().displayName() + " 移出编组")
                                     .withStyle(ChatFormatting.YELLOW));
                 }
                 case CREATE_GROUP -> {
-                    if (payload.parameter.isEmpty()) {
+                    if (parameter.isEmpty()) {
                         player.sendSystemMessage(
                                 Component.literal("编组名称不能为空").withStyle(ChatFormatting.RED));
                         return;
                     }
-                    fm.createGroup(player.getUUID(), payload.parameter);
+                    fm.createGroup(player.getUUID(), parameter);
                     fm.savePlayerData(player.serverLevel(), player.getUUID());
                     player.sendSystemMessage(
-                            Component.literal("已创建编组: " + payload.parameter)
+                            Component.literal("已创建编组: " + parameter)
                                     .withStyle(ChatFormatting.GREEN));
                 }
             }
         });
     }
 
-    private static AircraftEntity resolveAircraft(ServerPlayer player, UUID aircraftUUID) {
+    private static String normalizeParameter(String parameter) {
+        String value = parameter == null ? "" : parameter.trim();
+        return value.length() <= MAX_GROUP_NAME_LENGTH ? value : value.substring(0, MAX_GROUP_NAME_LENGTH);
+    }
+
+    private static AircraftEntity resolveOwnedAircraft(ServerPlayer player, UUID aircraftUUID) {
         if (player.serverLevel().getEntity(aircraftUUID) instanceof AircraftEntity aircraft
-                && aircraft.isAlive()) {
+                && aircraft.isAlive()
+                && player.getUUID().equals(aircraft.getOwnerUUID())) {
             return aircraft;
         }
         player.sendSystemMessage(
-                Component.literal("找不到该飞机").withStyle(ChatFormatting.RED));
+                Component.literal("找不到该飞机或无权操作").withStyle(ChatFormatting.RED));
         return null;
     }
 }

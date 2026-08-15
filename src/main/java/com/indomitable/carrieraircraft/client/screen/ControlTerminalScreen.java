@@ -9,8 +9,15 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
@@ -64,6 +71,15 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     private static final int DROPDOWN_SEL   = 0xFF1A3A6E;
     private static final int DROPDOWN_BORDER= 0xFF0F3460;
 
+    // 地形渲染颜色
+    private static final int TERRAIN_WATER_DEEP    = 0xFF0A1F3F; // 深海
+    private static final int TERRAIN_WATER_SHALLOW = 0xFF1A4F7F; // 浅海
+    private static final int TERRAIN_LAND_LOW      = 0xFF1A4D2E; // 低地（深绿）
+    private static final int TERRAIN_LAND_MID      = 0xFF2D5A3F; // 中地（绿）
+    private static final int TERRAIN_LAND_HIGH     = 0xFF4A6F5A; // 高地（浅绿）
+    private static final int TERRAIN_LAND_MOUNTAIN = 0xFF6A7F7F; // 山地（灰绿）
+    private static final int TERRAIN_LAND_PEAK     = 0xFF8A9A9A; // 山峰（灰白）
+
     // ── 布局常量 ──
     private static final int WIDTH  = 272;
     private static final int HEIGHT = 220;
@@ -82,11 +98,18 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     private static final int RIGHT_X = MAP_X + MAP_W + 4; // 182
     private static final int RIGHT_W = 84;
 
+    // 底部按钮宽度（调整为可容纳两个中文字的宽度）
+    private static final int BOTTOM_BTN_W = 21;
+
     // 底部按钮区
     private static final int BTN_AREA_Y = 184;
 
-    // 小地图：每像素代表的世界距离
-    private static final double MAP_SCALE = 2.5; // 100px = 250 格
+    // 小地图：每像素代表的世界距离（动态计算）
+    private static final double MIN_MAP_SCALE = 1.0;   // 最大放大（1格/像素）
+    private static final double MAX_MAP_SCALE = 10.0;  // 最大缩小（10格/像素）
+    private static final double MAP_MARGIN = 0.85;     // 目标保持在地图中心85%区域内
+
+    private double currentMapScale = 2.5; // 当前缩放比例
 
     // ── 设置子页面常量 ──
     private static final String[] AUTO_LOCK_NAMES   = {"最近", "最强", "集火", "分散", "类型"};
@@ -135,6 +158,7 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     // ── 状态 ──
     private boolean showSettings = false;
     private boolean showFormation = false;
+    private boolean showManualTarget = false;  // 是否显示手动添加坐标界面
     private int openDropdown = -1;
     private int openFormationDropdown = -1;
     private final List<String> localGroupNames = new ArrayList<>();
@@ -144,7 +168,10 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     private Button btnFormationBack;   // 编组子页面的返回按钮
     private Button btnScoutView;       // 切入长机视角
     private Button btnPlayerView;      // 切回玩家视角
-    private Button btnAddTarget;       // 添加打击目标
+    private Button btnClearTargets;    // 清空全部目标
+    private Button btnManualTarget;    // 手动添加坐标
+    private Button btnAddTarget;       // 添加打击目标（手动坐标界面中）
+    private Button btnManualBack;      // 手动坐标界面返回按钮
 
     // 坐标输入框
     private EditBox inputX, inputY, inputZ;
@@ -161,58 +188,77 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     protected void init() {
         super.init();
 
-        // ── 坐标输入框（右栏）──
+        // ── 坐标输入框（手动坐标界面用）──
         int inputX0 = leftPos + RIGHT_X + 18;
         int inputW = RIGHT_W - 20;
-        inputX = new EditBox(font, inputX0, topPos + MAP_Y + 16, inputW, 12, Component.literal("X"));
-        inputY = new EditBox(font, inputX0, topPos + MAP_Y + 32, inputW, 12, Component.literal("Y"));
-        inputZ = new EditBox(font, inputX0, topPos + MAP_Y + 48, inputW, 12, Component.literal("Z"));
+        inputX = new EditBox(font, inputX0, topPos + MAP_Y + 32, inputW, 12, Component.literal("X"));
+        inputY = new EditBox(font, inputX0, topPos + MAP_Y + 48, inputW, 12, Component.literal("Y"));
+        inputZ = new EditBox(font, inputX0, topPos + MAP_Y + 64, inputW, 12, Component.literal("Z"));
         configureCoordField(inputX, "X");
         configureCoordField(inputY, "Y");
         configureCoordField(inputZ, "Z");
 
-        // ── 添加打击目标按钮 ──
+        // ── 手动坐标界面的添加按钮 ──
         btnAddTarget = Button.builder(Component.literal("添加打击目标"), b -> {
             blurCoordFields();
             onAddTarget();
-        }).pos(leftPos + RIGHT_X + 2, topPos + MAP_Y + 64).size(RIGHT_W - 4, 14).build();
+        }).pos(leftPos + RIGHT_X + 2, topPos + MAP_Y + 80).size(RIGHT_W - 4, 14).build();
 
-        // ── 底部按钮区（单行 5 个按钮）──
+        // ── 手动坐标界面的返回按钮 ──
+        btnManualBack = Button.builder(Component.literal("← 返回"), b -> switchToMain())
+                .pos(leftPos + RIGHT_X + 2, topPos + MAP_Y + 98).size(RIGHT_W - 4, 14).build();
+
+        // ── 主界面右栏按钮 ──
+        btnClearTargets = Button.builder(Component.literal("清空全部目标"), b -> {
+            blurCoordFields();
+            onClearTargets();
+        }).pos(leftPos + RIGHT_X + 2, topPos + MAP_Y + 82).size(RIGHT_W - 4, 14).build();
+
+        btnManualTarget = Button.builder(Component.literal("手动添加坐标"), b -> {
+            blurCoordFields();
+            switchToManualTarget();
+        }).pos(leftPos + RIGHT_X + 2, topPos + MAP_Y + 100).size(RIGHT_W - 4, 14).build();
+
+        // ── 底部按钮区（单行 5 个按钮，平均分配宽度）──
         int bx = leftPos + RIGHT_X;
         int by = topPos + BTN_AREA_Y;
-        int buttonW = RIGHT_W / 5;
+        int btnSpacing = 0; // 按钮间距
+        int avgBtnW = (RIGHT_W - btnSpacing * 4) / 5; // 每个按钮平均宽度
 
         btnSettings = Button.builder(Component.literal("设置"), b -> {
             blurCoordFields();
             switchToSettings();
-        }).pos(bx, by).size(buttonW, 14).build();
+        }).pos(bx, by).size(avgBtnW, 14).build();
 
         btnFormation = Button.builder(Component.literal("编队"), b -> {
             blurCoordFields();
             switchToFormation();
-        }).pos(bx + buttonW, by).size(buttonW, 14).build();
+        }).pos(bx + avgBtnW + btnSpacing, by).size(avgBtnW, 14).build();
 
         btnRally = Button.builder(Component.literal("盘旋"), b -> {
             blurCoordFields();
             sendCommand(CommandPayload.SET_RALLY_POINT);
-        }).pos(bx + buttonW * 2, by).size(buttonW, 14).build();
+        }).pos(bx + (avgBtnW + btnSpacing) * 2, by).size(avgBtnW, 14).build();
 
         btnRecall = Button.builder(Component.literal("召回"), b -> {
             blurCoordFields();
             sendCommand(CommandPayload.RECALL_ALL);
-        }).pos(bx + buttonW * 3, by).size(buttonW, 14).build();
+        }).pos(bx + (avgBtnW + btnSpacing) * 3, by).size(avgBtnW, 14).build();
 
         btnRearm = Button.builder(Component.literal("补给"), b -> {
             blurCoordFields();
             sendCommand(CommandPayload.REARM_ALL);
-        }).pos(bx + buttonW * 4, by).size(RIGHT_W - buttonW * 4, 14).build();
+        }).pos(bx + (avgBtnW + btnSpacing) * 4, by).size(avgBtnW, 14).build();
 
         addRenderableWidget(btnSettings);
         addRenderableWidget(btnFormation);
         addRenderableWidget(btnRally);
         addRenderableWidget(btnRecall);
         addRenderableWidget(btnRearm);
+        addRenderableWidget(btnClearTargets);
+        addRenderableWidget(btnManualTarget);
         addRenderableWidget(btnAddTarget);
+        addRenderableWidget(btnManualBack);
 
         // ── 设置子页面返回按钮 ──
         btnBack = Button.builder(Component.literal("← 返回"), b -> switchToMain())
@@ -253,6 +299,7 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     private void switchToSettings() {
         showSettings = true;
         showFormation = false;
+        showManualTarget = false;
         openDropdown = -1;
         openFormationDropdown = -1;
         updateButtonVisibility();
@@ -261,6 +308,16 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     private void switchToFormation() {
         showFormation = true;
         showSettings = false;
+        showManualTarget = false;
+        openDropdown = -1;
+        openFormationDropdown = -1;
+        updateButtonVisibility();
+    }
+
+    private void switchToManualTarget() {
+        showManualTarget = true;
+        showSettings = false;
+        showFormation = false;
         openDropdown = -1;
         openFormationDropdown = -1;
         updateButtonVisibility();
@@ -269,22 +326,26 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     private void switchToMain() {
         showSettings = false;
         showFormation = false;
+        showManualTarget = false;
         openDropdown = -1;
         openFormationDropdown = -1;
         updateButtonVisibility();
     }
 
     private void updateButtonVisibility() {
-        boolean main = !showSettings && !showFormation;
+        boolean main = !showSettings && !showFormation && !showManualTarget;
         btnSettings.visible = main;
         btnFormation.visible = main;
         btnRally.visible = main;
         btnRecall.visible = main;
         btnRearm.visible = main;
-        btnAddTarget.visible = main;
-        inputX.visible = main;
-        inputY.visible = main;
-        inputZ.visible = main;
+        btnClearTargets.visible = main;
+        btnManualTarget.visible = main;
+        btnAddTarget.visible = showManualTarget;
+        btnManualBack.visible = showManualTarget;
+        inputX.visible = showManualTarget;
+        inputY.visible = showManualTarget;
+        inputZ.visible = showManualTarget;
         btnBack.visible = showSettings;
         btnFormationBack.visible = showFormation;
         btnScoutView.visible = showFormation;
@@ -303,6 +364,31 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         if (showSettings) {
             return mouseClickedSettings(mouseX, mouseY, button);
         }
+        if (showManualTarget) {
+            return super.mouseClicked(mouseX, mouseY, button);
+        }
+
+        // 主界面：处理目标列表点击（删除目标）
+        return mouseClickedMain(mouseX, mouseY, button);
+    }
+
+    private boolean mouseClickedMain(double mouseX, double mouseY, int button) {
+        // 检测目标列表中的删除按钮点击
+        List<ControlTerminalMenu.TargetInfo> targets = menu.targetList();
+        int startY = topPos + MAP_Y + 14;
+        int rowH = 14;
+
+        for (int i = 0; i < targets.size() && i < 4; i++) {
+            int rowY = startY + i * rowH;
+            // 删除按钮区域：右侧 10px
+            int deleteX = leftPos + RIGHT_X + RIGHT_W - 12;
+            if (mouseX >= deleteX && mouseX < deleteX + 10
+                    && mouseY >= rowY && mouseY < rowY + 12) {
+                onDeleteTarget(i);
+                return true;
+            }
+        }
+
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
@@ -425,6 +511,16 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         }
     }
 
+    private void onDeleteTarget(int index) {
+        PacketDistributor.sendToServer(new com.indomitable.carrieraircraft.network.ManageTargetsPayload(
+                com.indomitable.carrieraircraft.network.ManageTargetsPayload.Action.REMOVE_BY_INDEX, index));
+    }
+
+    private void onClearTargets() {
+        PacketDistributor.sendToServer(new com.indomitable.carrieraircraft.network.ManageTargetsPayload(
+                com.indomitable.carrieraircraft.network.ManageTargetsPayload.Action.CLEAR_ALL, 0));
+    }
+
     // ── 渲染 ──
 
     @Override
@@ -437,6 +533,8 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
             renderSettingsBg(g);
         } else if (showFormation) {
             renderFormationBg(g);
+        } else if (showManualTarget) {
+            renderManualTargetBg(g);
         } else {
             renderMainBg(g);
         }
@@ -472,6 +570,11 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         g.fill(leftPos + 8, topPos + 16, leftPos + WIDTH - 8, topPos + 178, PANEL_BG);
     }
 
+    private void renderManualTargetBg(GuiGraphics g) {
+        // 手动坐标界面：覆盖中间和右侧区域
+        g.fill(leftPos + MAP_X, topPos + 16, leftPos + WIDTH - 8, topPos + 178, PANEL_BG);
+    }
+
     @Override
     protected void renderLabels(GuiGraphics g, int mouseX, int mouseY) {
         g.drawString(font, title, (WIDTH - font.width(title)) / 2, 2, 0xFF50C4FF, false);
@@ -480,6 +583,8 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
             renderSettingsLabels(g, mouseX, mouseY);
         } else if (showFormation) {
             renderFormationLabels(g, mouseX, mouseY);
+        } else if (showManualTarget) {
+            renderManualTargetLabels(g, mouseX, mouseY);
         } else {
             renderMainLabels(g, mouseX, mouseY);
         }
@@ -510,7 +615,7 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
             g.fill(LEFT_X + 2, rowY + 1, LEFT_X + 4, rowY + 9, stateColor(info.state()));
             // 机型名 + 长机/编组标记
             String label = info.role().displayName();
-            if (isLeader) label = "★" + label;
+            if (isLeader) label = "⚑" + label;
             g.drawString(font, label, LEFT_X + 7, rowY, TEXT_COLOR, false);
             // 弹药
             g.drawString(font, String.format("海%d空%d", info.seaAmmo(), info.airAmmo()),
@@ -524,13 +629,33 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         // 中栏：小地图
         renderMiniMap(g);
 
-        // 右栏标题
-        g.drawString(font, "§b打击坐标", RIGHT_X + 2, MAP_Y + 2, 0xFF50C4FF, false);
+        // 右栏：目标列表
+        g.drawString(font, "§b目标列表", RIGHT_X + 2, MAP_Y + 2, 0xFF50C4FF, false);
 
-        // 坐标输入标签
-        g.drawString(font, "X", RIGHT_X + 4, MAP_Y + 16, DIM_TEXT, false);
-        g.drawString(font, "Y", RIGHT_X + 4, MAP_Y + 30, DIM_TEXT, false);
-        g.drawString(font, "Z", RIGHT_X + 4, MAP_Y + 44, DIM_TEXT, false);
+        List<ControlTerminalMenu.TargetInfo> targets = menu.targetList();
+        int ty = MAP_Y + 14;
+        for (int i = 0; i < targets.size() && i < 4; i++) {
+            ControlTerminalMenu.TargetInfo target = targets.get(i);
+            Vec3 pos = target.position();
+            int rowY = ty + i * 14;
+
+            // 目标类型标记
+            int markerColor = target.isEntity() ? MAP_TARGET_ENT : MAP_TARGET;
+            g.fill(RIGHT_X + 2, rowY + 1, RIGHT_X + 4, rowY + 9, markerColor);
+
+            // 坐标文本
+            String coordText = String.format("%.0f,%.0f,%.0f", pos.x, pos.y, pos.z);
+            g.drawString(font, coordText, RIGHT_X + 7, rowY, TEXT_COLOR, false);
+
+            // 删除按钮 "×"
+            int deleteX = RIGHT_X + RIGHT_W - 12;
+            boolean hover = mouseX >= deleteX && mouseX < deleteX + 10
+                    && mouseY >= rowY && mouseY < rowY + 12;
+            g.drawString(font, "×", deleteX, rowY, hover ? 0xFFFF5555 : DIM_TEXT, false);
+        }
+        if (targets.isEmpty()) {
+            g.drawString(font, "无目标", RIGHT_X + 7, ty, DIM_TEXT, false);
+        }
 
         // 盘旋点显示
         var rally = menu.rallyPoint();
@@ -546,7 +671,57 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
 
     // ── 小地图 ──
 
+    /**
+     * 根据所有目标和飞机的距离动态计算地图缩放比例
+     */
+    private void updateMapScale() {
+        Vec3 playerPos = menu.playerPosition();
+        double maxDist = 50.0; // 默认至少显示 50 格范围
+
+        // 计算所有飞机的最远距离
+        for (var aircraft : menu.aircraftList()) {
+            double dist = Math.sqrt(
+                Math.pow(aircraft.position().x - playerPos.x, 2) +
+                Math.pow(aircraft.position().z - playerPos.z, 2)
+            );
+            maxDist = Math.max(maxDist, dist);
+        }
+
+        // 计算所有目标的最远距离
+        for (var target : menu.targetList()) {
+            double dist = Math.sqrt(
+                Math.pow(target.position().x - playerPos.x, 2) +
+                Math.pow(target.position().z - playerPos.z, 2)
+            );
+            maxDist = Math.max(maxDist, dist);
+        }
+
+        // 计算盘旋点距离
+        var rally = menu.rallyPoint();
+        if (rally != null) {
+            double dist = Math.sqrt(
+                Math.pow(rally.x - playerPos.x, 2) +
+                Math.pow(rally.z - playerPos.z, 2)
+            );
+            maxDist = Math.max(maxDist, dist);
+        }
+
+        // 计算所需缩放比例：让最远点保持在地图中心 85% 区域内
+        double mapRadius = Math.min(MAP_W, MAP_H) / 2.0 * MAP_MARGIN;
+        double requiredScale = maxDist / mapRadius;
+
+        // 限制在最小/最大缩放范围内，并平滑过渡
+        double targetScale = Math.max(MIN_MAP_SCALE, Math.min(MAX_MAP_SCALE, requiredScale));
+
+        // 平滑过渡（避免突变）
+        double lerp = 0.1; // 每帧插值 10%
+        currentMapScale = currentMapScale * (1 - lerp) + targetScale * lerp;
+    }
+
     private void renderMiniMap(GuiGraphics g) {
+        // 动态更新地图缩放
+        updateMapScale();
+
         // renderLabels 中坐标相对于 GUI 左上角，不需要 leftPos/topPos
         int mapLeft = MAP_X;
         int mapTop = MAP_Y;
@@ -555,6 +730,15 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         int centerX = mapLeft + MAP_W / 2;
         int centerZ = mapTop + MAP_H / 2;
 
+        Vec3 playerPos = menu.playerPosition();
+        Level level = minecraft.level;
+
+        // ── 第一层：地形渲染 ──
+        if (level != null) {
+            renderTerrain(g, level, playerPos, mapLeft, mapTop, mapRight, mapBottom);
+        }
+
+        // ── 第二层：网格线 ──
         for (int i = 1; i < 4; i++) {
             int gx = mapLeft + i * MAP_W / 4;
             int gz = mapTop + i * MAP_H / 4;
@@ -564,8 +748,7 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         g.fill(centerX, mapTop, centerX + 1, mapBottom, 0xFF333366);
         g.fill(mapLeft, centerZ, mapRight, centerZ + 1, 0xFF333366);
 
-        Vec3 playerPos = menu.playerPosition();
-
+        // ── 第三层：战术标记（盘旋点、目标、飞机、玩家）──
         var rally = menu.rallyPoint();
         if (rally != null) {
             drawMapMarker(g, rally.x, rally.z, playerPos.x, playerPos.z, centerX, centerZ, mapLeft, mapTop, mapRight, mapBottom, MAP_RALLY, 3);
@@ -587,7 +770,74 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         g.fill(mapLeft - 1, mapTop, mapLeft, mapBottom, DIVIDER);
         g.fill(mapRight, mapTop, mapRight + 1, mapBottom, DIVIDER);
 
-        g.drawString(font, String.format("%.0f格", MAP_SCALE * MAP_W / 2), mapLeft + 2, mapBottom + 2, DIM_TEXT, false);
+        // 显示当前缩放比例（每半径对应的实际距离）
+        double radiusMeters = currentMapScale * MAP_W / 2;
+        g.drawString(font, String.format("%.0f格", radiusMeters), mapLeft + 2, mapBottom + 2, DIM_TEXT, false);
+    }
+
+    /**
+     * 渲染地形层：区分水面/陆地，用高度着色
+     */
+    private void renderTerrain(GuiGraphics g, Level level, Vec3 playerPos,
+                               int mapLeft, int mapTop, int mapRight, int mapBottom) {
+        int mapW = mapRight - mapLeft;
+        int mapH = mapBottom - mapTop;
+
+        // 采样密度：每 3 像素采样一次（降低性能开销）
+        int sampleStep = 3;
+
+        for (int px = 0; px < mapW; px += sampleStep) {
+            for (int pz = 0; pz < mapH; pz += sampleStep) {
+                // 屏幕坐标转世界坐标
+                double worldX = playerPos.x + (px - mapW / 2.0) * currentMapScale;
+                double worldZ = playerPos.z + (pz - mapH / 2.0) * currentMapScale;
+
+                BlockPos pos = new BlockPos((int) worldX, 64, (int) worldZ);
+
+                // 获取地表高度
+                int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE, pos.getX(), pos.getZ());
+                BlockPos surfacePos = new BlockPos(pos.getX(), surfaceY, pos.getZ());
+                BlockState surfaceBlock = level.getBlockState(surfacePos);
+
+                // 判断是否是水面（检查流体状态）
+                FluidState fluidState = level.getFluidState(surfacePos);
+                boolean isWater = !fluidState.isEmpty() && fluidState.is(Fluids.WATER);
+
+                // 如果表面是空气，检查下方一格
+                if (!isWater && surfaceBlock.isAir() && surfaceY > 0) {
+                    BlockPos belowPos = surfacePos.below();
+                    FluidState belowFluid = level.getFluidState(belowPos);
+                    if (!belowFluid.isEmpty() && belowFluid.is(Fluids.WATER)) {
+                        isWater = true;
+                        surfaceY = belowPos.getY();
+                    }
+                }
+
+                int color;
+                if (isWater) {
+                    // 水面：根据深度着色
+                    color = (surfaceY < 60) ? TERRAIN_WATER_DEEP : TERRAIN_WATER_SHALLOW;
+                } else {
+                    // 陆地：根据高度着色
+                    if (surfaceY < 65) {
+                        color = TERRAIN_LAND_LOW;      // 低地（接近海平面）
+                    } else if (surfaceY < 75) {
+                        color = TERRAIN_LAND_MID;      // 平原
+                    } else if (surfaceY < 90) {
+                        color = TERRAIN_LAND_HIGH;     // 丘陵
+                    } else if (surfaceY < 110) {
+                        color = TERRAIN_LAND_MOUNTAIN; // 山地
+                    } else {
+                        color = TERRAIN_LAND_PEAK;     // 山峰
+                    }
+                }
+
+                // 绘制地形色块
+                g.fill(mapLeft + px, mapTop + pz,
+                       mapLeft + px + sampleStep, mapTop + pz + sampleStep,
+                       color);
+            }
+        }
     }
 
     private void drawMapMarker(GuiGraphics g, double worldX, double worldZ,
@@ -597,8 +847,8 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
                                int color, int size) {
         double dx = worldX - playerX;
         double dz = worldZ - playerZ;
-        int screenX = centerX + (int) Math.round(dx / MAP_SCALE);
-        int screenZ = centerZ + (int) Math.round(dz / MAP_SCALE);
+        int screenX = centerX + (int) Math.round(dx / currentMapScale);
+        int screenZ = centerZ + (int) Math.round(dz / currentMapScale);
 
         screenX = Math.max(mapLeft + 1, Math.min(mapRight - size - 1, screenX));
         screenZ = Math.max(mapTop + 1, Math.min(mapBottom - size - 1, screenZ));
@@ -641,7 +891,7 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
             // 长机 / 编组标记
             boolean isLeader = info.uuid().equals(leaderId);
             String group = menu.aircraftGroup(info.uuid());
-            String statusText = isLeader ? "★长机" : (group != null ? "[" + group + "]" : "未编组");
+            String statusText = isLeader ? "⚑长机" : (group != null ? "[" + group + "]" : "未编组");
             int statusColor = isLeader ? 0xFFFFD700 : (group != null ? 0xFF90FF90 : DIM_TEXT);
             g.drawString(font, statusText, LEFT_X + 7, rowY + 10, statusColor, false);
             // 弹药
@@ -694,6 +944,20 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
         boolean hover = mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + 14;
         if (hover) g.fill(x, y, x + w, y + 14, DROPDOWN_HOVER);
         g.drawString(font, text, x + 4, y + 2, hover ? 0xFFFFEB3B : TEXT_COLOR, false);
+    }
+
+    // ── 手动坐标界面渲染 ──
+
+    private void renderManualTargetLabels(GuiGraphics g, int mouseX, int mouseY) {
+        g.drawString(font, "§b手动添加坐标", RIGHT_X + 2, MAP_Y + 2, 0xFF50C4FF, false);
+
+        // 坐标输入标签
+        g.drawString(font, "X", RIGHT_X + 4, MAP_Y + 32, DIM_TEXT, false);
+        g.drawString(font, "Y", RIGHT_X + 4, MAP_Y + 48, DIM_TEXT, false);
+        g.drawString(font, "Z", RIGHT_X + 4, MAP_Y + 64, DIM_TEXT, false);
+
+        // 提示文字
+        g.drawString(font, "输入目标坐标", RIGHT_X + 2, MAP_Y + 16, TEXT_COLOR, false);
     }
 
     private List<String> getGroupNames() {

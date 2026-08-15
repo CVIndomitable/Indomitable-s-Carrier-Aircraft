@@ -96,8 +96,6 @@ public class AircraftEntity extends FlyingMob {
     private Vec3 offlineHoldPoint;
     @Nullable
     private Entity dogfightTarget;
-    @Nullable
-
 
     /** 盘旋相位偏移（弧度），每架飞机不同，避免所有飞机挤在同一轨道点 */
     private double orbitPhase;
@@ -321,6 +319,7 @@ public class AircraftEntity extends FlyingMob {
         if (++targetRefreshTimer >= TARGET_REFRESH_INTERVAL) {
             targetRefreshTimer = 0;
             updateAttackSolution();
+            if (attackSolution == null) return; // Target invalidated during refresh
         }
         flyTowards(attackSolution.dropPoint(), spec.speed());
         if (position().distanceToSqr(attackSolution.dropPoint()) < ARRIVAL_THRESHOLD * ARRIVAL_THRESHOLD) {
@@ -402,14 +401,20 @@ public class AircraftEntity extends FlyingMob {
 
         // 靠近玩家自动回收（距离基于到玩家的3D距离）
         if (distToOwner < COLLECT_RANGE + spec.standbyHeight() * 0.1) {
+            // 先自动补给
+            boolean rearmed = rearmFromInventory(owner);
+
             ItemStack stack = toStack();
             if (owner.getInventory().add(stack)) {
-                owner.sendSystemMessage(Component.literal(String.format(
-                        "已回收 %s（对海 %d/%d，对空 %d/%d）",
+                // 消息显示补给后的弹药状态
+                Component msg = Component.literal(String.format(
+                        "已回收 %s（对海 %d/%d，对空 %d/%d）%s",
                         getRole().displayName(),
                         seaWeaponSlot.count(), seaWeaponSlot.capacity(),
-                        airWeaponSlot.count(), airWeaponSlot.capacity()
-                )).withStyle(ChatFormatting.GREEN));
+                        airWeaponSlot.count(), airWeaponSlot.capacity(),
+                        rearmed ? " [已补给]" : ""
+                )).withStyle(rearmed ? ChatFormatting.GOLD : ChatFormatting.GREEN);
+                owner.sendSystemMessage(msg);
                 discard();
             }
         }
@@ -735,6 +740,8 @@ public class AircraftEntity extends FlyingMob {
 
         BombEntity bomb = new BombEntity(level(), spawnPos, velocity,
                 spec.explosionRadius(), spec.weaponDamage(), weaponType, targetUUID);
+        bomb.setOwner(getOwner());
+        bomb.setSourceAircraft(this);
         level().addFreshEntity(bomb);
     }
 
@@ -891,7 +898,7 @@ public class AircraftEntity extends FlyingMob {
         if (oldState != state) {
             stateTimer = 0;
             fireTimer = 0;
-            targetRefreshTimer = TARGET_REFRESH_INTERVAL;
+            // 移除 targetRefreshTimer 的重置，让 refreshTarget() 自己管理计时器
             if (state == AircraftState.RETURNING) clearAswGlow();
         }
         this.entityData.set(DATA_STATE, state.name());
@@ -943,6 +950,8 @@ public class AircraftEntity extends FlyingMob {
     public void setAmmoCount(int count) { seaWeaponSlot.setCount(count); syncAmmoData(); }
 
     public int getAirAmmoCount() { return entityData.get(DATA_AIR_AMMO_COUNT); }
+
+    public void setAirAmmoCount(int count) { airWeaponSlot.setCount(count); syncAmmoData(); }
 
     @Nullable
     public UUID getOwnerUUID() { return ownerUUID; }
@@ -1004,5 +1013,18 @@ public class AircraftEntity extends FlyingMob {
             Vec3 pos = currentTarget.fallbackPosition();
             compound.putDouble("TargetX", pos.x); compound.putDouble("TargetY", pos.y); compound.putDouble("TargetZ", pos.z);
         }
+    }
+
+    /**
+     * 获取飞机的所有者实体。
+     *
+     * @return 所有者实体，如果找不到则返回 null
+     */
+    @Nullable
+    public Entity getOwner() {
+        if (ownerUUID == null || !(level() instanceof ServerLevel serverLevel)) {
+            return null;
+        }
+        return serverLevel.getEntity(ownerUUID);
     }
 }
