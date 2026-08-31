@@ -12,7 +12,7 @@ import org.slf4j.Logger;
  *
  * 子系统注册清单（按构造顺序）：
  *   1. ModDataComponents     — 自定义 DataComponent（飞机状态/弹药/锁定目标等）
- *   2. ModBlocks             — 方块注册（控制面板等）
+ *   2. ModBlocks             — 方块注册（控制面板等；目前为空，由 ControlTerminalItem 提供 GUI 入口）
  *   3. ModItems              — 物品注册（飞机召唤物品等）
  *   4. ModCreativeTabs       — 创造模式标签页
  *   5. ModMenuTypes          — GUI 菜单类型（控制面板 GUI）
@@ -28,30 +28,17 @@ public class IndomitableCarrierAircraft {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public IndomitableCarrierAircraft(IEventBus modEventBus, ModContainer modContainer) {
-        LOGGER.info("=== Indomitable's Carrier Aircraft Initialization START ===");
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("Indomitable's Carrier Aircraft initialization");
+        }
 
         // 注册所有子系统
-        LOGGER.info("Registering DataComponents...");
         ModDataComponents.DATA_COMPONENTS.register(modEventBus);
-
-        LOGGER.info("Registering Blocks...");
         ModBlocks.BLOCKS.register(modEventBus);
-
-        LOGGER.info("Registering Items...");
         ModItems.ITEMS.register(modEventBus);
-
-        LOGGER.info("Registering Creative Tabs...");
         ModCreativeTabs.CREATIVE_TABS.register(modEventBus);
-
-        LOGGER.info("Registering Menu Types...");
         ModMenuTypes.MENU_TYPES.register(modEventBus);
-
-        LOGGER.info("Registering Entity Types...");
         ModEntityTypes.ENTITY_TYPES.register(modEventBus);
-
-        LOGGER.info("Registering Sounds...");
         ModSounds.SOUND_EVENTS.register(modEventBus);
-
-        LOGGER.info("=== Indomitable's Carrier Aircraft Initialization COMPLETE ===");
     }
 }

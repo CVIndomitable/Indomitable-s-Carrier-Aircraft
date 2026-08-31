@@ -7,6 +7,7 @@ import com.indomitable.carrieraircraft.firecontrol.FireControlSystem;
 import com.indomitable.carrieraircraft.firecontrol.FireControlTarget;
 import com.indomitable.carrieraircraft.formation.FormationManager;
 import com.indomitable.carrieraircraft.menu.ControlTerminalMenu;
+import io.netty.handler.codec.DecoderException;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -31,10 +32,14 @@ public record TerminalSyncPayload(
         List<AircraftData> aircraft,
         List<TargetData> targets,
         Vec3 playerPos,
+        Vec3 rallyPoint,
         int forcedChunkCount,
         UUID leaderUUID,
         List<String> groupNames
 ) implements CustomPacketPayload {
+    private static final int MAX_AIRCRAFT = 1024;
+    private static final int MAX_TARGETS = FireControlSystem.MAX_TARGETS;
+    private static final int MAX_GROUPS = 256;
 
     public record AircraftData(UUID uuid, AircraftRole role, AircraftState state,
                                int seaAmmo, int airAmmo, double x, double z,
@@ -51,6 +56,12 @@ public record TerminalSyncPayload(
                     (buf, pkt) -> {
                         buf.writeDouble(pkt.playerPos.x);
                         buf.writeDouble(pkt.playerPos.z);
+                        buf.writeBoolean(pkt.rallyPoint != null);
+                        if (pkt.rallyPoint != null) {
+                            buf.writeDouble(pkt.rallyPoint.x);
+                            buf.writeDouble(pkt.rallyPoint.y);
+                            buf.writeDouble(pkt.rallyPoint.z);
+                        }
                         buf.writeVarInt(pkt.aircraft.size());
                         for (var a : pkt.aircraft) {
                             buf.writeUUID(a.uuid);
@@ -81,8 +92,10 @@ public record TerminalSyncPayload(
                     buf -> {
                         double px = buf.readDouble();
                         double pz = buf.readDouble();
+                        Vec3 rallyPoint = buf.readBoolean()
+                                ? new Vec3(buf.readDouble(), buf.readDouble(), buf.readDouble()) : null;
                         List<AircraftData> aircraft = new ArrayList<>();
-                        int acCount = buf.readVarInt();
+                        int acCount = readCount(buf, MAX_AIRCRAFT, "aircraft");
                         for (int i = 0; i < acCount; i++) {
                             UUID uuid = buf.readUUID();
                             AircraftRole role = AircraftRole.byId(buf.readUtf());
@@ -98,7 +111,7 @@ public record TerminalSyncPayload(
                                     group.isEmpty() ? null : group));
                         }
                         List<TargetData> targets = new ArrayList<>();
-                        int tCount = buf.readVarInt();
+                        int tCount = readCount(buf, MAX_TARGETS, "targets");
                         for (int i = 0; i < tCount; i++) {
                             double tx = buf.readDouble();
                             double tz = buf.readDouble();
@@ -107,12 +120,12 @@ public record TerminalSyncPayload(
                         }
                         int forcedChunkCount = buf.readVarInt();
                         UUID leaderUUID = buf.readBoolean() ? buf.readUUID() : null;
-                        int gnCount = buf.readVarInt();
+                        int gnCount = readCount(buf, MAX_GROUPS, "groups");
                         List<String> groupNames = new ArrayList<>(gnCount);
                         for (int i = 0; i < gnCount; i++) {
                             groupNames.add(buf.readUtf());
                         }
-                        return new TerminalSyncPayload(aircraft, targets, new Vec3(px, 0, pz),
+                        return new TerminalSyncPayload(aircraft, targets, new Vec3(px, 0, pz), rallyPoint,
                                 forcedChunkCount, leaderUUID, groupNames);
                     }
             );
@@ -120,6 +133,14 @@ public record TerminalSyncPayload(
     @Override
     public Type<? extends CustomPacketPayload> type() {
         return TYPE;
+    }
+
+    private static int readCount(RegistryFriendlyByteBuf buf, int max, String field) {
+        int count = buf.readVarInt();
+        if (count < 0 || count > max) {
+            throw new DecoderException("Invalid terminal " + field + " count: " + count);
+        }
+        return count;
     }
 
     /**
@@ -153,9 +174,10 @@ public record TerminalSyncPayload(
         int forcedChunkCount = fm.getForcedChunkCount(player.getUUID());
         UUID leaderUUID = fm.getLeaderUUID(player.getUUID());
         List<String> groupNames = fm.getGroupNames(player.getUUID());
+        Vec3 rallyPoint = fm.getRallyPoint(level, player.getUUID());
 
         PacketDistributor.sendToPlayer(player, new TerminalSyncPayload(
-                aircraft, targets, pp, forcedChunkCount, leaderUUID, groupNames));
+                aircraft, targets, pp, rallyPoint, forcedChunkCount, leaderUUID, groupNames));
     }
 
     /**

@@ -70,9 +70,10 @@ public class AircraftSpawnerItem extends Item {
      * 放飞飞机，返回是否成功
      */
     private boolean spawnAircraft(ServerLevel level, Player player, ItemStack stack) {
-        com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info("=== AIRCRAFT LAUNCH ===");
-
-        Vec3 spawnPos = player.position().add(0, SPAWN_HEIGHT_OFFSET, 0);
+        // M14：使用 MOTION_BLOCKING 高度图，避免在洞穴/水中固定 +20 时生成在方块内。
+        int groundY = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING,
+                player.blockPosition().getX(), player.blockPosition().getZ());
+        Vec3 spawnPos = new Vec3(player.getX(), groundY + SPAWN_HEIGHT_OFFSET, player.getZ());
 
         try {
             AircraftSpec spec = getSpecForRole(role);
@@ -98,8 +99,6 @@ public class AircraftSpawnerItem extends Item {
                                 role.displayName(), aircraft.getAmmoCount(), aircraft.getAirAmmoCount())
                         : "已放飞" + role.displayName();
                 player.sendSystemMessage(Component.literal(label).withStyle(ChatFormatting.GREEN));
-                com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.info(
-                        "Aircraft launched at {} for player {}", spawnPos, player.getName().getString());
             } else {
                 player.sendSystemMessage(Component.literal("放飞失败").withStyle(ChatFormatting.RED));
                 com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.error("Failed to add aircraft entity to world");

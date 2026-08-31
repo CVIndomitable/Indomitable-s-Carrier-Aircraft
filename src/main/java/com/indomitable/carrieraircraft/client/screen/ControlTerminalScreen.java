@@ -40,11 +40,9 @@ import java.util.UUID;
  *     │  (左栏)    │  (中栏)      │  Z [____]     │
  *     │            │              │  [添加打击目标] │
  *     │            │              │  ● 盘旋点      │
- * 184 ├────────────┴──────────────┼───────────────┤
- *     │           玩家背包 3×9+9   │[设置][编队][盘旋][召回]
- * 200 ├───────────────────────────┤               │
- *     │           快捷栏           │               │
- * 220 └───────────────────────────┴───────────────┘
+ * 184 ├────────────┴──────────────┴───────────────┤
+ *     │  [设置] [编队] [盘旋] [召回] [补给]  │
+ * 220 └──────────────────────────────────────────┘
  * </pre>
  *
  * <h2>子页面</h2>
@@ -98,8 +96,9 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     private static final int RIGHT_X = MAP_X + MAP_W + 4; // 182
     private static final int RIGHT_W = 84;
 
-    // 底部按钮宽度（调整为可容纳两个中文字的宽度）
-    private static final int BOTTOM_BTN_W = 21;
+    // 底部按钮横跨整个终端，为中文标签保留足够的水平留白。
+    private static final int BOTTOM_BTN_W = 48;
+    private static final int BOTTOM_BTN_SPACING = 2;
 
     // 底部按钮区
     private static final int BTN_AREA_Y = 184;
@@ -111,6 +110,26 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
 
     private double currentMapScale = 2.5; // 当前缩放比例
 
+    // ── 地形缓存 ──
+    /** 玩家位置/缩放变化超过此阈值（方块数）即重算地形，避免每帧 ~1100 次世界查询。 */
+    private static final double TERRAIN_REBUILD_DISTANCE = 4.0;
+    /** 缩放变化超过此比例（相对当前）时也重算。 */
+    private static final double TERRAIN_REBUILD_SCALE_RATIO = 0.15;
+    /** 客户端 tick 节流：超过此间隔即使没移动也强制重算，避免长时间停留在某点看到错误地形。 */
+    private static final int TERRAIN_REFRESH_TICKS = 20;
+    /** 缓存的像素网格：每个 (gridX, gridZ) 对应一个高度采样格，按 {@code TERRAIN_SAMPLE_STEP} 取样一次。 */
+    private int[] cachedTerrainGrid;
+    /** 缓存对应的地图尺寸（像素），变化时需要重新分配。 */
+    private int cachedGridMapW;
+    private int cachedGridMapH;
+    /** 上次重建时的玩家位置（方块坐标，避免浮点误差）。 */
+    private double cachedPlayerX;
+    private double cachedPlayerZ;
+    /** 上次重建时的缩放。 */
+    private double cachedMapScale;
+    /** 上次重建时的客户端 tick 数（来自 {@code minecraft.level#getGameTime}）。 */
+    private long cachedBuildTick = Long.MIN_VALUE;
+
     // ── 设置子页面常量 ──
     private static final String[] AUTO_LOCK_NAMES   = {"最近", "最强", "集火", "分散", "类型"};
     private static final String[] ASSIGN_NAMES      = {"集火", "均衡"};
@@ -120,11 +139,11 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
 
     private static class DropdownDef {
         final String[] options;
-        final byte[] commands;
+        final CommandPayload.Action[] commands;
         final int y;
         final int currentGetter;
 
-        DropdownDef(String[] options, byte[] commands, int y, int currentGetter) {
+        DropdownDef(String[] options, CommandPayload.Action[] commands, int y, int currentGetter) {
             this.options = options;
             this.commands = commands;
             this.y = y;
@@ -134,24 +153,32 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
 
     private final DropdownDef[] dropdowns = {
         new DropdownDef(AUTO_LOCK_NAMES,
-                new byte[]{CommandPayload.SET_AUTO_LOCK_NEAREST, CommandPayload.SET_AUTO_LOCK_STRONGEST,
-                           CommandPayload.SET_AUTO_LOCK_FOCUS, CommandPayload.SET_AUTO_LOCK_SPREAD,
-                           CommandPayload.SET_AUTO_LOCK_TYPE_FILTER},
+                new CommandPayload.Action[]{CommandPayload.Action.SET_AUTO_LOCK_NEAREST,
+                        CommandPayload.Action.SET_AUTO_LOCK_STRONGEST,
+                        CommandPayload.Action.SET_AUTO_LOCK_FOCUS,
+                        CommandPayload.Action.SET_AUTO_LOCK_SPREAD,
+                        CommandPayload.Action.SET_AUTO_LOCK_TYPE_FILTER},
                 28, 0),
         new DropdownDef(ASSIGN_NAMES,
-                new byte[]{CommandPayload.SET_ASSIGN_FOCUS, CommandPayload.SET_ASSIGN_SPREAD},
+                new CommandPayload.Action[]{CommandPayload.Action.SET_ASSIGN_FOCUS,
+                        CommandPayload.Action.SET_ASSIGN_SPREAD},
                 44, 1),
         new DropdownDef(AIR_DEFENSE_NAMES,
-                new byte[]{CommandPayload.SET_AIR_DEFENSE_SELF, CommandPayload.SET_AIR_DEFENSE_ACTIVE,
-                           CommandPayload.SET_AIR_DEFENSE_LOW},
+                new CommandPayload.Action[]{CommandPayload.Action.SET_AIR_DEFENSE_SELF,
+                        CommandPayload.Action.SET_AIR_DEFENSE_ACTIVE,
+                        CommandPayload.Action.SET_AIR_DEFENSE_LOW},
                 60, 2),
         new DropdownDef(BOMBS_NAMES,
-                new byte[]{CommandPayload.SET_BOMBS_1, CommandPayload.SET_BOMBS_2,
-                           CommandPayload.SET_BOMBS_3, CommandPayload.SET_BOMBS_4},
+                new CommandPayload.Action[]{CommandPayload.Action.SET_BOMBS_1,
+                        CommandPayload.Action.SET_BOMBS_2,
+                        CommandPayload.Action.SET_BOMBS_3,
+                        CommandPayload.Action.SET_BOMBS_4},
                 76, 3),
         new DropdownDef(MIN_DMG_NAMES,
-                new byte[]{CommandPayload.SET_MIN_DMG_0, CommandPayload.SET_MIN_DMG_20,
-                           CommandPayload.SET_MIN_DMG_40, CommandPayload.SET_MIN_DMG_80},
+                new CommandPayload.Action[]{CommandPayload.Action.SET_MIN_DMG_0,
+                        CommandPayload.Action.SET_MIN_DMG_20,
+                        CommandPayload.Action.SET_MIN_DMG_40,
+                        CommandPayload.Action.SET_MIN_DMG_80},
                 92, 4),
     };
 
@@ -219,62 +246,68 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
             switchToManualTarget();
         }).pos(leftPos + RIGHT_X + 2, topPos + MAP_Y + 100).size(RIGHT_W - 4, 14).build();
 
-        // ── 底部按钮区（单行 5 个按钮，平均分配宽度）──
-        int bx = leftPos + RIGHT_X;
+        buildBottomButtons();
+        buildSubPageButtons();
+
+        addRenderableWidget(btnClearTargets);
+        addRenderableWidget(btnManualTarget);
+        addRenderableWidget(btnAddTarget);
+        addRenderableWidget(btnManualBack);
+    }
+
+    /** 底部 5 个等宽按钮（设置 / 编队 / 盘旋 / 召回 / 补给）。 */
+    private void buildBottomButtons() {
+        int buttonRowWidth = BOTTOM_BTN_W * 5 + BOTTOM_BTN_SPACING * 4;
+        int bx = leftPos + (WIDTH - buttonRowWidth) / 2;
         int by = topPos + BTN_AREA_Y;
-        int btnSpacing = 0; // 按钮间距
-        int avgBtnW = (RIGHT_W - btnSpacing * 4) / 5; // 每个按钮平均宽度
 
         btnSettings = Button.builder(Component.literal("设置"), b -> {
             blurCoordFields();
             switchToSettings();
-        }).pos(bx, by).size(avgBtnW, 14).build();
+        }).pos(bx, by).size(BOTTOM_BTN_W, 14).build();
 
         btnFormation = Button.builder(Component.literal("编队"), b -> {
             blurCoordFields();
             switchToFormation();
-        }).pos(bx + avgBtnW + btnSpacing, by).size(avgBtnW, 14).build();
+        }).pos(bx + BOTTOM_BTN_W + BOTTOM_BTN_SPACING, by).size(BOTTOM_BTN_W, 14).build();
 
         btnRally = Button.builder(Component.literal("盘旋"), b -> {
             blurCoordFields();
-            sendCommand(CommandPayload.SET_RALLY_POINT);
-        }).pos(bx + (avgBtnW + btnSpacing) * 2, by).size(avgBtnW, 14).build();
+            sendCommand(CommandPayload.Action.SET_RALLY_POINT);
+        }).pos(bx + (BOTTOM_BTN_W + BOTTOM_BTN_SPACING) * 2, by).size(BOTTOM_BTN_W, 14).build();
 
         btnRecall = Button.builder(Component.literal("召回"), b -> {
             blurCoordFields();
-            sendCommand(CommandPayload.RECALL_ALL);
-        }).pos(bx + (avgBtnW + btnSpacing) * 3, by).size(avgBtnW, 14).build();
+            sendCommand(CommandPayload.Action.RECALL_ALL);
+        }).pos(bx + (BOTTOM_BTN_W + BOTTOM_BTN_SPACING) * 3, by).size(BOTTOM_BTN_W, 14).build();
 
         btnRearm = Button.builder(Component.literal("补给"), b -> {
             blurCoordFields();
-            sendCommand(CommandPayload.REARM_ALL);
-        }).pos(bx + (avgBtnW + btnSpacing) * 4, by).size(avgBtnW, 14).build();
+            sendCommand(CommandPayload.Action.REARM_ALL);
+        }).pos(bx + (BOTTOM_BTN_W + BOTTOM_BTN_SPACING) * 4, by).size(BOTTOM_BTN_W, 14).build();
 
         addRenderableWidget(btnSettings);
         addRenderableWidget(btnFormation);
         addRenderableWidget(btnRally);
         addRenderableWidget(btnRecall);
         addRenderableWidget(btnRearm);
-        addRenderableWidget(btnClearTargets);
-        addRenderableWidget(btnManualTarget);
-        addRenderableWidget(btnAddTarget);
-        addRenderableWidget(btnManualBack);
+    }
 
-        // ── 设置子页面返回按钮 ──
+    /** 设置 / 编队子页面的固定按钮（返回、长机/玩家视角）。 */
+    private void buildSubPageButtons() {
         btnBack = Button.builder(Component.literal("← 返回"), b -> switchToMain())
                 .pos(leftPos + 8, topPos + 160).size(60, 14).build();
         addRenderableWidget(btnBack);
 
-        // ── 编组子页面返回按钮 ──
         btnFormationBack = Button.builder(Component.literal("← 返回"), b -> switchToMain())
                 .pos(leftPos + 8, topPos + 160).size(60, 14).build();
         addRenderableWidget(btnFormationBack);
 
-        btnScoutView = Button.builder(Component.literal("长机视角"), b -> sendCommand(CommandPayload.ENTER_LEADER_CAMERA))
+        btnScoutView = Button.builder(Component.literal("长机视角"), b -> sendCommand(CommandPayload.Action.ENTER_LEADER_CAMERA))
                 .pos(leftPos + 74, topPos + 160).size(68, 14).build();
         addRenderableWidget(btnScoutView);
 
-        btnPlayerView = Button.builder(Component.literal("玩家视角"), b -> sendCommand(CommandPayload.EXIT_LEADER_CAMERA))
+        btnPlayerView = Button.builder(Component.literal("玩家视角"), b -> sendCommand(CommandPayload.Action.EXIT_LEADER_CAMERA))
                 .pos(leftPos + 148, topPos + 160).size(68, 14).build();
         addRenderableWidget(btnPlayerView);
     }
@@ -776,34 +809,93 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     }
 
     /**
-     * 渲染地形层：区分水面/陆地，用高度着色
+     * 渲染地形层：区分水面/陆地，用高度着色。
+     *
+     * <p>采样网格按 {@code sampleStep} 缓存到 {@link #cachedTerrainGrid}，仅在玩家位置
+     * /缩放/客户端 tick 变化超过阈值时刷新，从而把每帧 ~1100 次同步世界查询降到几乎为零。
      */
     private void renderTerrain(GuiGraphics g, Level level, Vec3 playerPos,
                                int mapLeft, int mapTop, int mapRight, int mapBottom) {
         int mapW = mapRight - mapLeft;
         int mapH = mapBottom - mapTop;
-
-        // 采样密度：每 3 像素采样一次（降低性能开销）
         int sampleStep = 3;
 
-        for (int px = 0; px < mapW; px += sampleStep) {
-            for (int pz = 0; pz < mapH; pz += sampleStep) {
-                // 屏幕坐标转世界坐标
+        int[] grid = ensureTerrainGrid(mapW, mapH, sampleStep);
+        if (needsTerrainRebuild(playerPos)) {
+            rebuildTerrainGrid(grid, mapW, mapH, sampleStep, level, playerPos);
+            cachedPlayerX = playerPos.x;
+            cachedPlayerZ = playerPos.z;
+            cachedMapScale = currentMapScale;
+            cachedBuildTick = minecraft.level.getGameTime();
+        }
+
+        // 把缓存的采样格按 sampleStep 拉伸绘制到屏幕
+        int gridCols = (mapW + sampleStep - 1) / sampleStep;
+        int gridRows = (mapH + sampleStep - 1) / sampleStep;
+        for (int gy = 0; gy < gridRows; gy++) {
+            int pz = gy * sampleStep;
+            int drawH = Math.min(sampleStep, mapH - pz);
+            for (int gx = 0; gx < gridCols; gx++) {
+                int px = gx * sampleStep;
+                int drawW = Math.min(sampleStep, mapW - px);
+                int color = grid[gy * gridCols + gx];
+                g.fill(mapLeft + px, mapTop + pz,
+                       mapLeft + px + drawW, mapTop + pz + drawH, color);
+            }
+        }
+    }
+
+    /** 根据当前地图尺寸分配或复用采样网格；尺寸变化时重新分配。 */
+    private int[] ensureTerrainGrid(int mapW, int mapH, int sampleStep) {
+        int gridCols = (mapW + sampleStep - 1) / sampleStep;
+        int gridRows = (mapH + sampleStep - 1) / sampleStep;
+        int requiredSize = gridCols * gridRows;
+        if (cachedTerrainGrid == null || cachedGridMapW != mapW || cachedGridMapH != mapH) {
+            cachedTerrainGrid = new int[requiredSize];
+            cachedGridMapW = mapW;
+            cachedGridMapH = mapH;
+            // 强制下次进入时重算
+            cachedBuildTick = Long.MIN_VALUE;
+        }
+        return cachedTerrainGrid;
+    }
+
+    /** 判断当前是否需要重算地形缓存。 */
+    private boolean needsTerrainRebuild(Vec3 playerPos) {
+        if (cachedTerrainGrid == null || cachedBuildTick == Long.MIN_VALUE) return true;
+        // 缩放变化超过比例阈值
+        if (cachedMapScale > 0.0) {
+            double scaleRatio = Math.abs(currentMapScale - cachedMapScale) / cachedMapScale;
+            if (scaleRatio > TERRAIN_REBUILD_SCALE_RATIO) return true;
+        }
+        // 玩家位置变化超过距离阈值
+        double dx = playerPos.x - cachedPlayerX;
+        double dz = playerPos.z - cachedPlayerZ;
+        if (dx * dx + dz * dz > TERRAIN_REBUILD_DISTANCE * TERRAIN_REBUILD_DISTANCE) return true;
+        // 客户端 tick 节流：超过最大间隔强制刷新（兜底）
+        long now = minecraft.level.getGameTime();
+        return now - cachedBuildTick > TERRAIN_REFRESH_TICKS;
+    }
+
+    /** 重新计算地形采样网格（一次性 ~1100 次同步世界查询，正常情况每 20 tick 一次）。 */
+    private void rebuildTerrainGrid(int[] grid, int mapW, int mapH, int sampleStep, Level level, Vec3 playerPos) {
+        int gridCols = (mapW + sampleStep - 1) / sampleStep;
+        int gridRows = (mapH + sampleStep - 1) / sampleStep;
+        int idx = 0;
+        for (int gy = 0; gy < gridRows; gy++) {
+            int pz = gy * sampleStep;
+            for (int gx = 0; gx < gridCols; gx++) {
+                int px = gx * sampleStep;
                 double worldX = playerPos.x + (px - mapW / 2.0) * currentMapScale;
                 double worldZ = playerPos.z + (pz - mapH / 2.0) * currentMapScale;
 
                 BlockPos pos = new BlockPos((int) worldX, 64, (int) worldZ);
-
-                // 获取地表高度
                 int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE, pos.getX(), pos.getZ());
                 BlockPos surfacePos = new BlockPos(pos.getX(), surfaceY, pos.getZ());
                 BlockState surfaceBlock = level.getBlockState(surfacePos);
-
-                // 判断是否是水面（检查流体状态）
                 FluidState fluidState = level.getFluidState(surfacePos);
                 boolean isWater = !fluidState.isEmpty() && fluidState.is(Fluids.WATER);
 
-                // 如果表面是空气，检查下方一格
                 if (!isWater && surfaceBlock.isAir() && surfaceY > 0) {
                     BlockPos belowPos = surfacePos.below();
                     FluidState belowFluid = level.getFluidState(belowPos);
@@ -815,27 +907,19 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
 
                 int color;
                 if (isWater) {
-                    // 水面：根据深度着色
                     color = (surfaceY < 60) ? TERRAIN_WATER_DEEP : TERRAIN_WATER_SHALLOW;
+                } else if (surfaceY < 65) {
+                    color = TERRAIN_LAND_LOW;
+                } else if (surfaceY < 75) {
+                    color = TERRAIN_LAND_MID;
+                } else if (surfaceY < 90) {
+                    color = TERRAIN_LAND_HIGH;
+                } else if (surfaceY < 110) {
+                    color = TERRAIN_LAND_MOUNTAIN;
                 } else {
-                    // 陆地：根据高度着色
-                    if (surfaceY < 65) {
-                        color = TERRAIN_LAND_LOW;      // 低地（接近海平面）
-                    } else if (surfaceY < 75) {
-                        color = TERRAIN_LAND_MID;      // 平原
-                    } else if (surfaceY < 90) {
-                        color = TERRAIN_LAND_HIGH;     // 丘陵
-                    } else if (surfaceY < 110) {
-                        color = TERRAIN_LAND_MOUNTAIN; // 山地
-                    } else {
-                        color = TERRAIN_LAND_PEAK;     // 山峰
-                    }
+                    color = TERRAIN_LAND_PEAK;
                 }
-
-                // 绘制地形色块
-                g.fill(mapLeft + px, mapTop + pz,
-                       mapLeft + px + sampleStep, mapTop + pz + sampleStep,
-                       color);
+                grid[idx++] = color;
             }
         }
     }
@@ -961,12 +1045,9 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
     }
 
     private List<String> getGroupNames() {
-        List<String> names = new ArrayList<>();
-        for (String name : menu.groupNames()) {
-            if (!names.contains(name)) {
-                names.add(name);
-            }
-        }
+        // M12：服务端是唯一权威来源。客户端只在收到 TerminalSyncPayload 后保留 menu.groupNames()，
+        // localGroupNames 仅作为本地未确认的乐观追加（在收到服务器 ACK 后会被覆盖）。
+        List<String> names = new ArrayList<>(menu.groupNames());
         for (String name : localGroupNames) {
             if (!names.contains(name)) {
                 names.add(name);
@@ -1030,7 +1111,7 @@ public class ControlTerminalScreen extends AbstractContainerScreen<ControlTermin
 
     // ── 网络 ──
 
-    private void sendCommand(byte action) {
+    private void sendCommand(CommandPayload.Action action) {
         PacketDistributor.sendToServer(new CommandPayload(action));
     }
 

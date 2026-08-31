@@ -1,10 +1,12 @@
 package com.indomitable.carrieraircraft.aircraft;
 
+import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 
 import java.util.EnumSet;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -33,6 +35,66 @@ public record AircraftSpec(
         Set<SeaAttackMode> seaAttackModes,
         Set<AmmoType> allowedSeaAmmo
 ) {
+    private static final int MAX_AMMO_CAPACITY = 100_000;
+
+    /**
+     * 紧凑构造器只执行不可空 / 集合不可变等结构性检查。
+     *
+     * <p>数值范围校验（{@link #requireRange} / {@link #requireIntRange}）已迁移到
+     * {@link AircraftSpecLoader#parseSpec}——只在 JSON 数据包解析阶段强校验。
+     * 来自 NBT 不可信数据的恢复走宽松模式（{@link #load} 中夹紧到边界值），
+     * 避免单字段越界就导致整个 entity NBT 读取失败。
+     */
+    public AircraftSpec {
+        airWeaponMode = Objects.requireNonNull(airWeaponMode, "airWeaponMode");
+        seaAttackModes = Set.copyOf(Objects.requireNonNull(seaAttackModes, "seaAttackModes"));
+        allowedSeaAmmo = Set.copyOf(Objects.requireNonNull(allowedSeaAmmo, "allowedSeaAmmo"));
+        if (seaAttackModes.isEmpty() || allowedSeaAmmo.isEmpty()) {
+            throw new IllegalArgumentException("Aircraft attack modes and allowed ammunition must not be empty");
+        }
+        // NONE 机型不允许挂载可攻击弹药
+        if (airWeaponMode == com.indomitable.carrieraircraft.aircraft.AirWeaponMode.NONE
+                && magazineCapacity > 0) {
+            throw new IllegalArgumentException(
+                    "airWeaponMode.NONE requires magazineCapacity == 0, got " + magazineCapacity);
+        }
+    }
+
+    /**
+     * 数据包加载阶段使用的强校验：所有数值都必须在合理范围内，
+     * 否则视为数据错误抛出 {@link IllegalArgumentException}。
+     *
+     * <p>由 {@link AircraftSpecLoader#parseSpec} 调用；NBT 加载不走此方法。
+     */
+    public AircraftSpec validated() {
+        requireRange("speed", speed, 0.01, 4.0);
+        requireRange("standbyHeight", standbyHeight, 0.0, 512.0);
+        requireRange("attackHeight", attackHeight, 0.0, 512.0);
+        requireRange("attackRange", attackRange, 0.0, 512.0);
+        requireRange("turnDistance", turnDistance, 0.0, 2048.0);
+        requireRange("health", health, 1.0, 2048.0);
+        requireRange("weaponDamage", weaponDamage, 0.0, 2048.0);
+        requireRange("explosionRadius", explosionRadius, 0.0, 64.0);
+        requireRange("turretRange", turretRange, 0.0, 512.0);
+        requireRange("aswRange", aswRange, 0.0, 512.0);
+        requireIntRange("seaAmmoCapacity", seaAmmoCapacity, 0, MAX_AMMO_CAPACITY);
+        requireIntRange("magazineCapacity", magazineCapacity, 0, MAX_AMMO_CAPACITY);
+        requireIntRange("burstSize", burstSize, 1, MAX_AMMO_CAPACITY);
+        return this;
+    }
+
+    private static void requireRange(String name, double value, double min, double max) {
+        if (!Double.isFinite(value) || value < min || value > max) {
+            throw new IllegalArgumentException(name + " must be finite and in [" + min + ", " + max + "]");
+        }
+    }
+
+    private static void requireIntRange(String name, int value, int min, int max) {
+        if (value < min || value > max) {
+            throw new IllegalArgumentException(name + " must be in [" + min + ", " + max + "]");
+        }
+    }
+
     // ==================== 内置规格 ====================
 
     /** B-25：水平轰炸机，前射+自卫炮塔，航弹 */
@@ -112,26 +174,94 @@ public record AircraftSpec(
         return tag;
     }
 
-    /** 从 NBT 恢复规格，字段缺失时使用 B25 默认值 */
+    /**
+     * 从 NBT 恢复规格。字段缺失或越界时安全夹紧到边界值，而不抛异常。
+     *
+     * <p>NBT 来自不可信数据（玩家可能用 mod 改存储），任何字段越界都直接抛
+     * {@link IllegalArgumentException} 会导致 entity 整体加载失败、丢失实例。
+     * 这里采用宽松模式：缺失字段用 {@link AircraftSpecLoader} 当前默认机型兜底，
+     * 越界字段夹紧到合法区间。
+     */
     public static AircraftSpec load(CompoundTag tag) {
+        AircraftSpec defaults = AircraftSpecLoader.getInstance().getSpec("b25");
         return new AircraftSpec(
-                tag.contains("Speed") ? tag.getDouble("Speed") : B25.speed,
-                tag.contains("StandbyHeight") ? tag.getDouble("StandbyHeight") : B25.standbyHeight,
-                tag.contains("AttackHeight") ? tag.getDouble("AttackHeight") : B25.attackHeight,
-                tag.contains("AttackRange") ? tag.getDouble("AttackRange") : B25.attackRange,
-                tag.contains("TurnDistance") ? tag.getDouble("TurnDistance") : B25.turnDistance,
-                tag.contains("Health") ? tag.getDouble("Health") : B25.health,
-                tag.contains("SeaAmmoCapacity") ? tag.getInt("SeaAmmoCapacity") : B25.seaAmmoCapacity,
-                tag.contains("MagazineCapacity") ? tag.getInt("MagazineCapacity") : B25.magazineCapacity,
-                tag.contains("BurstSize") ? tag.getInt("BurstSize") : B25.burstSize,
-                tag.contains("WeaponDamage") ? tag.getFloat("WeaponDamage") : B25.weaponDamage,
-                tag.contains("ExplosionRadius") ? tag.getFloat("ExplosionRadius") : B25.explosionRadius,
-                tag.contains("TurretRange") ? tag.getDouble("TurretRange") : B25.turretRange,
-                tag.contains("AswRange") ? tag.getDouble("AswRange") : B25.aswRange,
-                tag.contains("AirWeaponMode") ? AirWeaponMode.valueOf(tag.getString("AirWeaponMode")) : B25.airWeaponMode,
-                tag.contains("SeaAttackModes") ? loadSeaAttackModes(tag) : B25.seaAttackModes,
-                tag.contains("AllowedSeaAmmo") ? loadAllowedSeaAmmo(tag) : B25.allowedSeaAmmo
+                clampDouble("Speed", getOrDefaultDouble(tag, "Speed", defaults::speed), 0.01, 4.0),
+                clampDouble("StandbyHeight", getOrDefaultDouble(tag, "StandbyHeight", defaults::standbyHeight), 0.0, 512.0),
+                clampDouble("AttackHeight", getOrDefaultDouble(tag, "AttackHeight", defaults::attackHeight), 0.0, 512.0),
+                clampDouble("AttackRange", getOrDefaultDouble(tag, "AttackRange", defaults::attackRange), 0.0, 512.0),
+                clampDouble("TurnDistance", getOrDefaultDouble(tag, "TurnDistance", defaults::turnDistance), 0.0, 2048.0),
+                clampDouble("Health", getOrDefaultDouble(tag, "Health", defaults::health), 1.0, 2048.0),
+                clampInt("SeaAmmoCapacity", getOrDefaultInt(tag, "SeaAmmoCapacity", defaults::seaAmmoCapacity), 0, MAX_AMMO_CAPACITY),
+                clampInt("MagazineCapacity", getOrDefaultInt(tag, "MagazineCapacity", defaults::magazineCapacity), 0, MAX_AMMO_CAPACITY),
+                clampInt("BurstSize", getOrDefaultInt(tag, "BurstSize", defaults::burstSize), 1, MAX_AMMO_CAPACITY),
+                clampFloat("WeaponDamage", getOrDefaultFloat(tag, "WeaponDamage", defaults::weaponDamage), 0.0F, 2048.0F),
+                clampFloat("ExplosionRadius", getOrDefaultFloat(tag, "ExplosionRadius", defaults::explosionRadius), 0.0F, 64.0F),
+                clampDouble("TurretRange", getOrDefaultDouble(tag, "TurretRange", defaults::turretRange), 0.0, 512.0),
+                clampDouble("AswRange", getOrDefaultDouble(tag, "AswRange", defaults::aswRange), 0.0, 512.0),
+                loadEnum(tag, "AirWeaponMode", AirWeaponMode.class, defaults.airWeaponMode),
+                tag.contains("SeaAttackModes") ? loadSeaAttackModes(tag) : defaults.seaAttackModes,
+                tag.contains("AllowedSeaAmmo") ? loadAllowedSeaAmmo(tag) : defaults.allowedSeaAmmo
         );
+    }
+
+    private static double getOrDefaultDouble(CompoundTag tag, String key, java.util.function.DoubleSupplier fallback) {
+        return tag.contains(key) ? tag.getDouble(key) : fallback.getAsDouble();
+    }
+
+    private static int getOrDefaultInt(CompoundTag tag, String key, java.util.function.IntSupplier fallback) {
+        return tag.contains(key) ? tag.getInt(key) : fallback.getAsInt();
+    }
+
+    private static float getOrDefaultFloat(CompoundTag tag, String key, java.util.function.Supplier<Float> fallback) {
+        return tag.contains(key) ? tag.getFloat(key) : fallback.get();
+    }
+
+    private static double clampDouble(String name, double value, double min, double max) {
+        if (!Double.isFinite(value)) {
+            return min;
+        }
+        if (value < min) {
+            IndomitableCarrierAircraft.LOGGER.warn("Aircraft spec {}={} below minimum {}, clamped", name, value, min);
+            return min;
+        }
+        if (value > max) {
+            IndomitableCarrierAircraft.LOGGER.warn("Aircraft spec {}={} above maximum {}, clamped", name, value, max);
+            return max;
+        }
+        return value;
+    }
+
+    private static int clampInt(String name, int value, int min, int max) {
+        if (value < min) {
+            IndomitableCarrierAircraft.LOGGER.warn("Aircraft spec {}={} below minimum {}, clamped", name, value, min);
+            return min;
+        }
+        if (value > max) {
+            IndomitableCarrierAircraft.LOGGER.warn("Aircraft spec {}={} above maximum {}, clamped", name, value, max);
+            return max;
+        }
+        return value;
+    }
+
+    private static float clampFloat(String name, float value, float min, float max) {
+        if (!Float.isFinite(value)) {
+            return min;
+        }
+        if (value < min) {
+            IndomitableCarrierAircraft.LOGGER.warn("Aircraft spec {}={} below minimum {}, clamped", name, value, min);
+            return min;
+        }
+        if (value > max) {
+            IndomitableCarrierAircraft.LOGGER.warn("Aircraft spec {}={} above maximum {}, clamped", name, value, max);
+            return max;
+        }
+        return value;
+    }
+
+    private static <E extends Enum<E>> E loadEnum(CompoundTag tag, String key, Class<E> type, E fallback) {
+        if (!tag.contains(key)) return fallback;
+        try { return Enum.valueOf(type, tag.getString(key)); }
+        catch (IllegalArgumentException ignored) { return fallback; }
     }
 
     private static Set<SeaAttackMode> loadSeaAttackModes(CompoundTag tag) {

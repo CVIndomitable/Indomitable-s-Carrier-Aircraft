@@ -52,6 +52,11 @@ public final class HitNotifier {
         optedOut.remove(playerId);
     }
 
+    /** 清理所有玩家偏好。在新存档启动或服务器停止时调用，避免跨存档泄漏。 */
+    public static void clearAll() {
+        optedOut.clear();
+    }
+
     /**
      * 发送命中反馈消息给玩家。
      *

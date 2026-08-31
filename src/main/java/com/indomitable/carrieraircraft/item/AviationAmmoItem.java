@@ -11,14 +11,14 @@ import java.util.List;
 
 public class AviationAmmoItem extends Item {
     private final AmmoType ammoType;
+    private final int nominalRounds;
     private final int nominalDamage;
-    private final int rounds;
 
-    public AviationAmmoItem(Properties properties, AmmoType ammoType, int nominalDamage, int rounds) {
+    public AviationAmmoItem(Properties properties, AmmoType ammoType, int nominalDamage, int nominalRounds) {
         super(properties);
         this.ammoType = ammoType;
         this.nominalDamage = nominalDamage;
-        this.rounds = rounds;
+        this.nominalRounds = nominalRounds;
     }
 
     public AmmoType ammoType() {
@@ -29,24 +29,47 @@ public class AviationAmmoItem extends Item {
         return nominalDamage;
     }
 
-    public int rounds() {
-        return rounds;
+    /**
+     * 弹匣构造时定义的"标称"装填量（满弹匣 = nominalRounds）。
+     * <p>注意：单次 {@link ItemStack} 的"当前剩余"使用 {@link #currentRounds(ItemStack)}。
+     */
+    public int nominalRounds() {
+        return nominalRounds;
     }
 
-    public int rounds(ItemStack stack) {
+    /**
+     * @deprecated 命名歧义，调用者实际想用"当前剩余"。改用 {@link #currentRounds} 或 {@link #nominalRounds}。
+     */
+    @Deprecated
+    public int rounds() {
+        return nominalRounds;
+    }
+
+    /**
+     * 当前弹匣剩余弹药数（非弹匣类弹药直接返回标称值）。
+     * <p>这是补给弹药时使用的语义：玩家的"剩余弹药"是这个值。
+     */
+    public int currentRounds(ItemStack stack) {
         if (ammoType != AmmoType.MAGAZINE) {
-            return rounds;
+            return nominalRounds;
         }
         Integer stored = stack.get(ModDataComponents.MAGAZINE_ROUNDS);
-        return stored == null ? rounds : Math.max(0, Math.min(rounds, stored));
+        return stored == null ? nominalRounds : Math.max(0, Math.min(nominalRounds, stored));
+    }
+
+    /**
+     * 兼容旧调用：{@link #currentRounds(ItemStack)} 的别名。
+     */
+    public int rounds(ItemStack stack) {
+        return currentRounds(stack);
     }
 
     public void setMagazineRounds(ItemStack stack, int value) {
         if (ammoType != AmmoType.MAGAZINE) {
             return;
         }
-        int clamped = Math.max(0, Math.min(rounds, value));
-        if (clamped >= rounds) {
+        int clamped = Math.max(0, Math.min(nominalRounds, value));
+        if (clamped >= nominalRounds) {
             stack.remove(ModDataComponents.MAGAZINE_ROUNDS);
         } else {
             stack.set(ModDataComponents.MAGAZINE_ROUNDS, clamped);
@@ -55,10 +78,11 @@ public class AviationAmmoItem extends Item {
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip, TooltipFlag flag) {
-        tooltip.add(Component.translatable("tooltip.indomitablecarrieraircraft.ammo_type", ammoType.name()));
+        tooltip.add(Component.translatable("tooltip.indomitablecarrieraircraft.ammo_type",
+                Component.translatable(ammoType.translationKey())));
         tooltip.add(Component.translatable("tooltip.indomitablecarrieraircraft.nominal_damage", nominalDamage));
-        if (rounds > 1) {
-            tooltip.add(Component.translatable("tooltip.indomitablecarrieraircraft.rounds", rounds(stack)));
+        if (nominalRounds > 1) {
+            tooltip.add(Component.translatable("tooltip.indomitablecarrieraircraft.rounds", currentRounds(stack)));
         }
     }
 }

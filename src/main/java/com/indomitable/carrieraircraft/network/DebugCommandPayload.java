@@ -120,11 +120,11 @@ public record DebugCommandPayload(
         Vec3 targetPos = new Vec3(pkt.targetX, pkt.targetY, pkt.targetZ);
 
         target.debugExecuteState(state, startPos, targetPos, pkt.loop);
-        player.sendSystemMessage(Component.literal(String.format(
-                "调试: %s → %s @ %.0f,%.0f,%.0f %s",
-                target.getRole().displayName(), state.name(),
-                startPos.x, startPos.y, startPos.z,
-                pkt.loop ? "[循环]" : "[单次]"
-        )).withStyle(ChatFormatting.AQUA));
+        player.sendSystemMessage(Component.literal("调试: " + target.getRole().displayName() + " → ")
+                .append(Component.translatable(state.translationKey()))
+                .append(Component.literal(String.format(" @ %.0f,%.0f,%.0f %s",
+                        startPos.x, startPos.y, startPos.z,
+                        pkt.loop ? "[循环]" : "[单次]")))
+                .withStyle(ChatFormatting.AQUA));
     }
 }

@@ -39,5 +39,10 @@ public class CameraStateTracker {
         trackedPlayers.remove(playerId);
     }
 
+    /** 清理所有数据。在新存档启动或服务器停止时调用,避免跨存档泄漏。 */
+    public void clearAll() {
+        trackedPlayers.clear();
+    }
+
     private record CameraState(Vec3 position, float xRot, float yRot) {}
 }

@@ -8,6 +8,7 @@ import com.indomitable.carrieraircraft.formation.FormationManager;
 import com.indomitable.carrieraircraft.network.TerminalSyncPayload;
 import com.indomitable.carrieraircraft.registry.ModMenuTypes;
 import com.indomitable.carrieraircraft.registry.ModItems;
+import io.netty.handler.codec.DecoderException;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -33,6 +34,8 @@ import java.util.UUID;
  * 客户端构造从 buffer 读取飞机列表和盘旋点，ContainerData 由框架自动填充。
  */
 public class ControlTerminalMenu extends AbstractContainerMenu {
+    private static final int MAX_AIRCRAFT = 1024;
+    private static final int MAX_GROUPS = 256;
 
     // ── ContainerData 索引 ──
     private static final int IDX_AUTO_LOCK = 0;
@@ -103,7 +106,7 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
                         buf.writeDouble(a.getZ());
                     }
                     // 盘旋点
-                    Vec3 rally = fm.getRallyPoint(player.getUUID());
+                    Vec3 rally = fm.getRallyPoint(player.serverLevel(), player.getUUID());
                     buf.writeBoolean(rally != null);
                     if (rally != null) {
                         buf.writeDouble(rally.x);
@@ -165,7 +168,7 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
         playerPosition = new Vec3(buf.readDouble(), 0, buf.readDouble());
 
         // 读取飞机列表（含位置）
-        int count = buf.readVarInt();
+        int count = readCount(buf, MAX_AIRCRAFT, "aircraft");
         for (int i = 0; i < count; i++) {
             UUID uuid = buf.readUUID();
             AircraftRole role = AircraftRole.byId(buf.readUtf());
@@ -188,7 +191,7 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
         }
 
         // 读取火控目标
-        int targetCount = buf.readVarInt();
+        int targetCount = readCount(buf, FireControlSystem.MAX_TARGETS, "targets");
         for (int i = 0; i < targetCount; i++) {
             double tx = buf.readDouble();
             double tz = buf.readDouble();
@@ -200,18 +203,26 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
         if (buf.readBoolean()) {
             leaderUUID = buf.readUUID();
         }
-        int groupCount = buf.readVarInt();
+        int groupCount = readCount(buf, MAX_AIRCRAFT, "aircraft groups");
         for (int i = 0; i < groupCount; i++) {
             String group = buf.readUtf();
             if (!group.isEmpty() && i < aircraftList.size()) {
                 aircraftGroupMap.put(aircraftList.get(i).uuid(), group);
             }
         }
-        int nameCount = buf.readVarInt();
+        int nameCount = readCount(buf, MAX_GROUPS, "group names");
         for (int i = 0; i < nameCount; i++) {
             groupNames.add(buf.readUtf());
         }
         forcedChunkCount = buf.readVarInt();
+    }
+
+    private static int readCount(RegistryFriendlyByteBuf buf, int max, String field) {
+        int count = buf.readVarInt();
+        if (count < 0 || count > max) {
+            throw new DecoderException("Invalid terminal " + field + " count: " + count);
+        }
+        return count;
     }
 
     // ── 同步数据读取（客户端 GUI 用） ──
@@ -273,6 +284,7 @@ public class ControlTerminalMenu extends AbstractContainerMenu {
      */
     public void syncFromServer(TerminalSyncPayload payload) {
         this.playerPosition = payload.playerPos();
+        this.rallyPoint = payload.rallyPoint();
         this.aircraftList.clear();
         this.aircraftGroupMap.clear();
         for (var a : payload.aircraft()) {

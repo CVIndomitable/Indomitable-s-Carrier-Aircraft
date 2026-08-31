@@ -6,11 +6,15 @@ import com.indomitable.carrieraircraft.aircraft.AssignmentMode;
 import com.indomitable.carrieraircraft.aircraft.AutoLockMode;
 import com.indomitable.carrieraircraft.firecontrol.PlayerAirControlSettings;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.datafix.DataFixTypes;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
@@ -33,6 +37,12 @@ public final class CarrierAircraftSavedData extends SavedData {
 
     private final Map<UUID, PlayerRecord> players = new HashMap<>();
 
+    /**
+     * 取得当前维度的 SavedData —— 跟随玩家所在维度，而非强行写入主世界。
+     *
+     * <p>原实现写到 {@code overworld()} 的 dataStorage，导致玩家在主世界以外召唤飞机
+     * 切回主世界时数据丢失、且跨存档污染。改为随当前 ServerLevel 持久化即可。
+     */
     public static CarrierAircraftSavedData get(ServerLevel level) {
         return level.getDataStorage().computeIfAbsent(FACTORY, DATA_NAME);
     }
@@ -92,7 +102,7 @@ public final class CarrierAircraftSavedData extends SavedData {
         return record == null ? FormationRecord.empty() : record.toFormationRecord();
     }
 
-    public void saveFormation(UUID playerId, @Nullable Vec3 rallyPoint, @Nullable UUID leader,
+    public void saveFormation(UUID playerId, @Nullable RallyPoint rallyPoint, @Nullable UUID leader,
                               Map<UUID, String> aircraftGroups, Set<String> groupNames) {
         PlayerRecord record = players.computeIfAbsent(playerId, id -> new PlayerRecord());
         record.rallyPoint = rallyPoint;
@@ -102,7 +112,9 @@ public final class CarrierAircraftSavedData extends SavedData {
         setDirty();
     }
 
-    public record FormationRecord(@Nullable Vec3 rallyPoint, @Nullable UUID leader,
+    public record RallyPoint(ResourceKey<Level> dimension, Vec3 position) {}
+
+    public record FormationRecord(@Nullable RallyPoint rallyPoint, @Nullable UUID leader,
                                   Map<UUID, String> aircraftGroups, Set<String> groupNames) {
         public static FormationRecord empty() {
             return new FormationRecord(null, null, Map.of(), Set.of());
@@ -116,7 +128,7 @@ public final class CarrierAircraftSavedData extends SavedData {
         private int bombsPerPass = 1;
         private float minimumEffectiveDamage = 20.0F;
         @Nullable
-        private Vec3 rallyPoint;
+        private RallyPoint rallyPoint;
         @Nullable
         private UUID leader;
         private Map<UUID, String> aircraftGroups = new HashMap<>();
@@ -136,7 +148,11 @@ public final class CarrierAircraftSavedData extends SavedData {
                     ? tag.getFloat("MinimumEffectiveDamage") : 20.0F;
 
             if (tag.contains("RallyX")) {
-                record.rallyPoint = new Vec3(tag.getDouble("RallyX"), tag.getDouble("RallyY"), tag.getDouble("RallyZ"));
+                ResourceLocation dimensionId = ResourceLocation.tryParse(tag.getString("RallyDimension"));
+                if (dimensionId == null) dimensionId = Level.OVERWORLD.location();
+                ResourceKey<Level> dimension = ResourceKey.create(Registries.DIMENSION, dimensionId);
+                record.rallyPoint = new RallyPoint(dimension,
+                        new Vec3(tag.getDouble("RallyX"), tag.getDouble("RallyY"), tag.getDouble("RallyZ")));
             }
             if (tag.hasUUID("Leader")) {
                 record.leader = tag.getUUID("Leader");
@@ -166,9 +182,10 @@ public final class CarrierAircraftSavedData extends SavedData {
             tag.putInt("BombsPerPass", bombsPerPass);
             tag.putFloat("MinimumEffectiveDamage", minimumEffectiveDamage);
             if (rallyPoint != null) {
-                tag.putDouble("RallyX", rallyPoint.x);
-                tag.putDouble("RallyY", rallyPoint.y);
-                tag.putDouble("RallyZ", rallyPoint.z);
+                tag.putString("RallyDimension", rallyPoint.dimension().location().toString());
+                tag.putDouble("RallyX", rallyPoint.position().x);
+                tag.putDouble("RallyY", rallyPoint.position().y);
+                tag.putDouble("RallyZ", rallyPoint.position().z);
             }
             if (leader != null) {
                 tag.putUUID("Leader", leader);
@@ -183,8 +200,11 @@ public final class CarrierAircraftSavedData extends SavedData {
             }
             tag.put("AircraftGroups", groups);
 
+            // M11：保存时合并去重，确保 GroupNames 与 AircraftGroups.values() 一致
+            Set<String> mergedNames = new LinkedHashSet<>(groupNames);
+            mergedNames.addAll(aircraftGroups.values());
             ListTag names = new ListTag();
-            for (String name : groupNames) {
+            for (String name : mergedNames) {
                 names.add(StringTag.valueOf(name));
             }
             tag.put("GroupNames", names);

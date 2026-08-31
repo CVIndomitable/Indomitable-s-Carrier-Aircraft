@@ -1,8 +1,10 @@
 package com.indomitable.carrieraircraft.targeting;
 
+import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
 import com.indomitable.carrieraircraft.entity.AircraftEntity;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
@@ -108,7 +110,12 @@ public class FriendlyFireFilter {
             return true;
         }
 
-        // 同队伍 = 友军
+        // 任一方主人同队伍 = 友军（即使飞机本身的 scoreboard team 没设置也能匹配）
+        if (sameOwnerTeam(aircraft1, aircraft2)) {
+            return true;
+        }
+
+        // 飞机本身的 scoreboard team 相等
         PlayerTeam team1 = aircraft1.getTeam();
         PlayerTeam team2 = aircraft2.getTeam();
         if (team1 != null && team1 == team2) {
@@ -116,6 +123,22 @@ public class FriendlyFireFilter {
         }
 
         return false;
+    }
+
+    /**
+     * I10：两架飞机的主人若处于同一队伍（{@code /team join} / 队友系统）则视为友军，
+     * 解决「A 和 B 玩家同一队伍、A 的飞机却仍会攻击 B 的飞机」的问题。
+     */
+    private static boolean sameOwnerTeam(AircraftEntity a1, AircraftEntity a2) {
+        UUID o1 = a1.getOwnerUUID();
+        UUID o2 = a2.getOwnerUUID();
+        if (o1 == null || o2 == null) return false;
+        if (!(a1.level() instanceof ServerLevel level)) return false;
+        Player p1 = level.getServer().getPlayerList().getPlayer(o1);
+        Player p2 = level.getServer().getPlayerList().getPlayer(o2);
+        if (p1 == null || p2 == null) return false;
+        PlayerTeam t1 = p1.getTeam();
+        return t1 != null && t1 == p2.getTeam();
     }
 
     /**
@@ -223,5 +246,37 @@ public class FriendlyFireFilter {
 
         // 其他情况允许锁定（玩家可以手动锁定任何目标，包括坐标、中立生物等）
         return target.isAlive() && target.isPickable();
+    }
+
+    /**
+     * 判断玩家拥有的弹药是否可以伤害目标。与手动锁定相比，这里额外执行实体标签和队伍友伤规则。
+     */
+    public static boolean canPlayerDamage(UUID playerUUID, @Nullable Entity owner, Entity target) {
+        if (!target.isAlive() || target.getUUID().equals(playerUUID)) {
+            return false;
+        }
+
+        Boolean tagResult = checkEntityTypeTags(target);
+        if (tagResult != null) {
+            return !tagResult;
+        }
+
+        if (target instanceof AircraftEntity aircraft && playerUUID.equals(aircraft.getOwnerUUID())) {
+            return false;
+        }
+        if (target instanceof OwnableEntity ownable && playerUUID.equals(ownable.getOwnerUUID())) {
+            return false;
+        }
+
+        PlayerTeam ownerTeam = owner == null ? null : owner.getTeam();
+        PlayerTeam targetTeam = target.getTeam();
+        if (ownerTeam != null && ownerTeam == targetTeam && !ownerTeam.isAllowFriendlyFire()) {
+            return false;
+        }
+        if (target instanceof Player) {
+            return ownerTeam != null && targetTeam != null && ownerTeam != targetTeam;
+        }
+
+        return true;
     }
 }

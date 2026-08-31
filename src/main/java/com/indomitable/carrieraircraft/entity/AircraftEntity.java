@@ -13,12 +13,16 @@ import com.indomitable.carrieraircraft.registry.ModEntityTypes;
 import com.indomitable.carrieraircraft.registry.ModItems;
 import com.indomitable.carrieraircraft.targeting.FriendlyFireFilter;
 import com.indomitable.carrieraircraft.targeting.TargetingSubsystem;
+import com.indomitable.carrieraircraft.util.Vec3Utils;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
@@ -77,10 +81,40 @@ public class AircraftEntity extends FlyingMob {
     private static final int POST_ATTACK_TICKS = 45;
     private static final int DOGFIGHT_BURST_INTERVAL = 8;
     private static final int PASS_COOLDOWN_TICKS = 12;
+    /** 自卫扫描间隔（每 N tick 一次）。 */
+    private static final int SELF_DEFENSE_INTERVAL = 5;
+    /** 盘旋 / 待机盘旋半径。 */
+    private static final double STANDBY_HOVER_RADIUS = 8.0;
+    private static final double ORBIT_HOVER_RADIUS = 12.0;
+    private static final double OFFLINE_HOVER_RADIUS = 12.0;
+    /** DOGFIGHT 状态脱离阈值（距离或时间）。 */
+    private static final double DOGFIGHT_LEAVE_DISTANCE = 220.0;
+    private static final int DOGFIGHT_LEAVE_TICKS = 220;
+    /** 投弹高度偏移（attacking 段内 releaseLine 后撤 2 格）。 */
+    private static final double RELEASE_LINE_BACK_OFFSET = 2.0;
+    /** 自卫消耗弹药数与单次伤害（I6：原 magic number）。 */
+    private static final int GUN_BURST_SIZE = 12;
+    private static final float GUN_BURST_DAMAGE = 4.0F;
+    /** 目标超出范围时直接 RETURNING 的阈值（I15：目标逃逸过远则返航）。 */
+    private static final double TARGET_OUT_OF_RANGE = 240.0;
+    /** 返回玩家时若反复失败，超过该 tick 数强制 discard（I7：回收超时）。 */
+    private static final int RECALL_TIMEOUT_TICKS = 200;
+    /** 飞机回收距离阈值。 */
+    private static final double COLLECT_RANGE = 3.0;
 
     // ==================== 实例数据 ====================
     @Nullable
     private UUID ownerUUID;
+    /**
+     * 飞机规格（速度、血量、弹药上限等）。
+     *
+     * <p>注意：该字段必须保留可变，原因是：
+     * <ul>
+     *   <li>{@link #create} 中由调用方注入新实例时需要赋值；</li>
+     *   <li>{@link #readAdditionalSaveData} 从 NBT 反序列化时需要替换为持久化值。</li>
+     * </ul>
+     * record 本身不可变，但 {@code spec} 字段可变以支持 NBT 恢复流程。
+     */
     private AircraftSpec spec;
 
     private WeaponSlot seaWeaponSlot;
@@ -90,6 +124,9 @@ public class AircraftEntity extends FlyingMob {
     private FireControlTarget currentTarget;
     @Nullable
     private ThreeCoordinateCalculator.AttackSolution attackSolution;
+    /** 缓存当前 attackSolution 派生的 releaseLine，避免 tickAttacking 每帧重建 Vec3。 */
+    @Nullable
+    private Vec3 cachedReleaseLine;
     @Nullable
     private Vec3 orbitPoint;
     @Nullable
@@ -104,6 +141,9 @@ public class AircraftEntity extends FlyingMob {
     private int fireTimer;
     private int targetRefreshTimer;
     private int aswPingTimer;
+    private int selfDefenseTimer;
+    /** RETURNING 状态下持续无法回收的 tick 数，超过阈值强制 discard。 */
+    private int recallTimer;
     private final Set<UUID> glowingTargets = new HashSet<>();
 
     // ── 调试模式 ──
@@ -144,6 +184,7 @@ public class AircraftEntity extends FlyingMob {
         aircraft.setPos(spawnPos);
         aircraft.ownerUUID = ownerUUID;
         aircraft.spec = spec;
+        aircraft.applySpecHealth(true);
         aircraft.airWeaponSlot = new WeaponSlot(AmmoType.MAGAZINE, spec.magazineCapacity(), spec.magazineCapacity());
 
         // 确定对海槽弹药
@@ -174,6 +215,13 @@ public class AircraftEntity extends FlyingMob {
                 .add(Attributes.MAX_HEALTH, 60.0)
                 .add(Attributes.FLYING_SPEED, 0.7)
                 .add(Attributes.FOLLOW_RANGE, 192.0);
+    }
+
+    private void applySpecHealth(boolean fillHealth) {
+        AttributeInstance maxHealth = getAttribute(Attributes.MAX_HEALTH);
+        if (maxHealth == null) return;
+        maxHealth.setBaseValue(spec.health());
+        setHealth(fillHealth ? getMaxHealth() : Math.min(getHealth(), getMaxHealth()));
     }
 
     @Override
@@ -251,9 +299,10 @@ public class AircraftEntity extends FlyingMob {
             return;
         }
 
-        if (tickCount % 40 == 0 && level() instanceof ServerLevel serverLevel) {
-            FormationManager.getInstance().registerAircraft(ownerUUID, this);
-            FormationManager.getInstance().updateLeaderChunkLoading(serverLevel, ownerUUID);
+        // 每 40 tick 把维护工作集中交给 FormationManager，
+        // 避免每架飞机各自调用 registerAircraft + getLeader 造成的 O(N²) 行为。
+        if (level() instanceof ServerLevel serverLevel) {
+            FormationManager.getInstance().tickMaintenance(serverLevel, serverLevel.getGameTime());
         }
 
         AircraftState currentState = getState();
@@ -282,7 +331,7 @@ public class AircraftEntity extends FlyingMob {
         offlineHoldPoint = null;
 
         Vec3 standbyPos = owner.position().add(0, spec.standbyHeight(), 0);
-        hoverAround(standbyPos, 8.0);
+        hoverAround(standbyPos, STANDBY_HOVER_RADIUS);
 
         if (hasSeaAmmo() && readyForSortie() && refreshTarget()) {
             setState(AircraftState.LOCKED);
@@ -292,7 +341,7 @@ public class AircraftEntity extends FlyingMob {
     private void tickOrbiting() {
         Vec3 center = orbitPoint;
         if (center == null) { setState(AircraftState.STANDBY); return; }
-        hoverAround(center, 12.0);
+        hoverAround(center, ORBIT_HOVER_RADIUS);
         if (hasSeaAmmo() && readyForSortie() && refreshTarget()) {
             setState(AircraftState.LOCKED);
         }
@@ -311,6 +360,7 @@ public class AircraftEntity extends FlyingMob {
         Entity targetEntity = target.resolveEntity(serverLevel);
         attackSolution = ThreeCoordinateCalculator.solve(
                 position(), targetPoint, targetEntity, spec, seaWeaponSlot.ammoType());
+        cachedReleaseLine = null; // 重新计算后失效
         setState(AircraftState.APPROACH);
     }
 
@@ -321,6 +371,8 @@ public class AircraftEntity extends FlyingMob {
             updateAttackSolution();
             if (attackSolution == null) return; // Target invalidated during refresh
         }
+        // I15：目标逃逸过远则直接返航
+        if (isTargetOutOfRange()) { setState(AircraftState.RETURNING); return; }
         flyTowards(attackSolution.dropPoint(), spec.speed());
         if (position().distanceToSqr(attackSolution.dropPoint()) < ARRIVAL_THRESHOLD * ARRIVAL_THRESHOLD) {
             setState(AircraftState.ATTACKING);
@@ -329,13 +381,14 @@ public class AircraftEntity extends FlyingMob {
 
     private void tickAttacking() {
         if (attackSolution == null) { setState(AircraftState.LOCKED); return; }
-        Vec3 releaseLine = attackSolution.impactPoint()
-                .subtract(attackSolution.attackDirection().scale(2.0))
-                .with(net.minecraft.core.Direction.Axis.Y, attackSolution.dropPoint().y);
-        flyTowards(releaseLine, spec.speed() * 0.92);
-        double distanceToImpact = position().multiply(1, 0, 1)
-                .distanceTo(attackSolution.impactPoint().multiply(1, 0, 1));
-        if (stateTimer > PASS_COOLDOWN_TICKS && distanceToImpact <= attackSolution.releaseDistance()) {
+        if (cachedReleaseLine == null) {
+            cachedReleaseLine = attackSolution.impactPoint()
+                    .subtract(attackSolution.attackDirection().scale(RELEASE_LINE_BACK_OFFSET))
+                    .with(Vec3Utils.Y_AXIS, attackSolution.dropPoint().y);
+        }
+        flyTowards(cachedReleaseLine, spec.speed() * 0.92);
+        double distToImpact = Vec3Utils.horizontalDistanceSqr(position(), attackSolution.impactPoint());
+        if (stateTimer > PASS_COOLDOWN_TICKS && distToImpact <= attackSolution.releaseDistance() * attackSolution.releaseDistance()) {
             setState(AircraftState.DROPPING);
         }
     }
@@ -376,18 +429,17 @@ public class AircraftEntity extends FlyingMob {
                 shootAirTarget(dogfightTarget);
             }
         }
-        if (distSq > 220.0 * 220.0 || stateTimer > 220) {
+        if (distSq > DOGFIGHT_LEAVE_DISTANCE * DOGFIGHT_LEAVE_DISTANCE || stateTimer > DOGFIGHT_LEAVE_TICKS) {
             dogfightTarget = null;
             setState(hasSeaAmmo() ? AircraftState.LOCKED : AircraftState.STANDBY);
         }
     }
 
-    private static final double COLLECT_RANGE = 3.0;
-
     private void tickReturning() {
         ServerPlayer owner = getOwnerPlayer();
-        if (owner == null) { holdWhileOwnerOffline(); return; }
+        if (owner == null) { holdWhileOwnerOffline(); recallTimer = 0; return; }
         offlineHoldPoint = null;
+        recallTimer++;
 
         Vec3 ownerPos = owner.position();
         double distToOwner = position().distanceTo(ownerPos);
@@ -417,6 +469,9 @@ public class AircraftEntity extends FlyingMob {
                 owner.sendSystemMessage(msg);
                 discard();
             }
+        } else if (recallTimer > RECALL_TIMEOUT_TICKS) {
+            // I7：超时强制销毁，避免背包满导致死循环
+            discard();
         }
     }
 
@@ -424,7 +479,14 @@ public class AircraftEntity extends FlyingMob {
         if (offlineHoldPoint == null) {
             offlineHoldPoint = orbitPoint != null ? orbitPoint : position();
         }
-        hoverAround(offlineHoldPoint, 12.0);
+        hoverAround(offlineHoldPoint, OFFLINE_HOVER_RADIUS);
+    }
+
+    /** I15：当前目标是否超出合理作战半径。 */
+    private boolean isTargetOutOfRange() {
+        if (currentTarget == null || !(level() instanceof ServerLevel serverLevel)) return false;
+        Vec3 targetPoint = currentTarget.currentPosition(serverLevel);
+        return Vec3Utils.horizontalDistanceSqr(position(), targetPoint) > TARGET_OUT_OF_RANGE * TARGET_OUT_OF_RANGE;
     }
 
     // ==================== 调试模式 ====================
@@ -504,12 +566,11 @@ public class AircraftEntity extends FlyingMob {
             }
             case ATTACKING -> {
                 if (attackSolution == null) { resetDebugLoop(); return; }
-                Vec3 releaseLine = attackSolution.impactPoint()
-                        .subtract(attackSolution.attackDirection().scale(2.0))
-                        .with(net.minecraft.core.Direction.Axis.Y, attackSolution.dropPoint().y);
+                Vec3 releaseLine = Vec3Utils.replaceY(
+                        attackSolution.impactPoint().subtract(attackSolution.attackDirection().scale(2.0)),
+                        attackSolution.dropPoint().y);
                 flyTowards(releaseLine, spec.speed() * 0.92);
-                double dist = position().multiply(1, 0, 1)
-                        .distanceTo(attackSolution.impactPoint().multiply(1, 0, 1));
+                double dist = Math.sqrt(Vec3Utils.horizontalDistanceSqr(position(), attackSolution.impactPoint()));
                 if (stateTimer > PASS_COOLDOWN_TICKS && dist <= attackSolution.releaseDistance()) {
                     if (debugLoop) { resetDebugLoop(); } else { debugStop(); }
                 }
@@ -622,6 +683,7 @@ public class AircraftEntity extends FlyingMob {
         }
         attackSolution = ThreeCoordinateCalculator.solve(
                 position(), currentTarget.currentPosition(serverLevel), targetEntity, spec, seaWeaponSlot.ammoType());
+        cachedReleaseLine = null; // 派生值失效
     }
 
     // ==================== 自卫与反潜 ====================
@@ -629,6 +691,9 @@ public class AircraftEntity extends FlyingMob {
     private void tickSelfDefense() {
         if (!(level() instanceof ServerLevel serverLevel) || getState() == AircraftState.DOGFIGHT) return;
         if (!spec.canAttackAir() || airWeaponSlot.count() <= 0 || ownerUUID == null) return;
+        // I1：每 5 tick 扫描一次而非每 tick
+        if (++selfDefenseTimer < SELF_DEFENSE_INTERVAL) return;
+        selfDefenseTimer = 0;
 
         PlayerAirControlSettings settings = FireControlSystem.getInstance().settings(serverLevel, ownerUUID);
         AirDefenseMode defenseMode = settings.airDefenseMode();
@@ -664,7 +729,16 @@ public class AircraftEntity extends FlyingMob {
             entity.addEffect(new MobEffectInstance(MobEffects.GLOWING, 80, 0, false, false, true));
             currentTargets.add(entity.getUUID());
         }
-        glowingTargets.removeIf(uuid -> !currentTargets.contains(uuid));
+        // 离开 AABB 的目标不再被本机扫描，需要主动移除 GLOWING 效果
+        // （其它反潜机会在自己的 40 tick 扫描中重新施加，所以这里移除是安全的）
+        glowingTargets.removeIf(uuid -> {
+            if (currentTargets.contains(uuid)) return false;
+            Entity entity = serverLevel.getEntity(uuid);
+            if (entity instanceof LivingEntity living && living.hasEffect(MobEffects.GLOWING)) {
+                living.removeEffect(MobEffects.GLOWING);
+            }
+            return true;
+        });
         glowingTargets.addAll(currentTargets);
     }
 
@@ -675,6 +749,14 @@ public class AircraftEntity extends FlyingMob {
 
     /** 清除所有被本机标记为发光的水下目标。 */
     private void clearAswGlow() {
+        if (level() instanceof ServerLevel serverLevel && !glowingTargets.isEmpty()) {
+            for (UUID uuid : glowingTargets) {
+                Entity entity = serverLevel.getEntity(uuid);
+                if (entity instanceof LivingEntity living && living.hasEffect(MobEffects.GLOWING)) {
+                    living.removeEffect(MobEffects.GLOWING);
+                }
+            }
+        }
         glowingTargets.clear();
     }
 
@@ -693,10 +775,10 @@ public class AircraftEntity extends FlyingMob {
     }
 
     private int calculateReleaseCount() {
-        if (ownerUUID == null) return spec.burstSize();
-        PlayerAirControlSettings settings = level() instanceof ServerLevel serverLevel
-                ? FireControlSystem.getInstance().settings(serverLevel, ownerUUID)
-                : FireControlSystem.getInstance().settings(ownerUUID);
+        if (ownerUUID == null || !(level() instanceof ServerLevel serverLevel)) {
+            return spec.burstSize();
+        }
+        PlayerAirControlSettings settings = FireControlSystem.getInstance().settings(serverLevel, ownerUUID);
         float remainingNominalDamage = seaWeaponSlot.count() * spec.weaponDamage();
         if (remainingNominalDamage < settings.minimumEffectiveDamage()) return seaWeaponSlot.count();
         return Math.max(1, Math.min(settings.bombsPerPass(), spec.burstSize()));
@@ -714,15 +796,14 @@ public class AircraftEntity extends FlyingMob {
         Vec3 spawnPos = position().add(0, -1.0, 0).add(offset);
         Vec3 velocity = getDeltaMovement();
         AmmoType ammoType = seaWeaponSlot.ammoType();
-        String weaponType = ammoType.name();
+        BombEntity.WeaponType weaponType = BombEntity.WeaponType.derive(ammoType, spec.seaAttackModes());
         UUID targetUUID = null;
 
         if (ammoType == AmmoType.AERIAL_TORPEDO) {
             velocity = attackSolution.attackDirection().scale(0.85).add(0, -0.08, 0);
         } else if (ammoType == AmmoType.ROCKET) {
             velocity = attackSolution.attackDirection().scale(1.7).add(0, -0.04, 0);
-        } else if (spec.seaAttackModes().contains(SeaAttackMode.DIVE_BOMBING)) {
-            weaponType = "GUIDED_BOMB";
+        } else if (weaponType == BombEntity.WeaponType.GUIDED_BOMB) {
             if (level() instanceof ServerLevel serverLevel && currentTarget != null) {
                 Entity target = currentTarget.resolveEntity(serverLevel);
                 if (target != null && target.isAlive()) {
@@ -746,11 +827,13 @@ public class AircraftEntity extends FlyingMob {
     }
 
     private void shootAirTarget(Entity target) {
-        if (airWeaponSlot.consume(12) <= 0) { syncAmmoData(); return; }
+        // L17：防御性检查 —— NONE 机型或无弹药时直接返回
+        if (!spec.canAttackAir() || airWeaponSlot.count() <= 0) { syncAmmoData(); return; }
+        if (airWeaponSlot.consume(GUN_BURST_SIZE) <= 0) { syncAmmoData(); return; }
         syncAmmoData();
         if (target instanceof LivingEntity living) {
             DamageSource source = damageSources().mobAttack(this);
-            living.hurt(source, 4.0F);
+            living.hurt(source, GUN_BURST_DAMAGE);
         }
     }
 
@@ -801,8 +884,9 @@ public class AircraftEntity extends FlyingMob {
     }
 
     public boolean canAttackEntity(Entity entity) {
-        if (!(entity instanceof LivingEntity living) || !(entity instanceof Enemy)
-                || entity instanceof AircraftEntity) return false;
+        // Enemy 接口继承 LivingEntity，所以只需一个 instanceof。
+        // AircraftEntity 已在「敌我识别」阶段排除，不需要再单独过滤。
+        if (!(entity instanceof LivingEntity living) || entity instanceof AircraftEntity) return false;
         if (spec.seaAttackModes().contains(SeaAttackMode.ASW_BOMBING)) return isUnderwaterHostile(living);
         if (seaWeaponSlot.ammoType() == AmmoType.AERIAL_TORPEDO) return isWaterTarget(living);
         return true;
@@ -846,7 +930,7 @@ public class AircraftEntity extends FlyingMob {
                 continue;
             }
             while (!stack.isEmpty() && slot.count() < slot.capacity()) {
-                slot.add(Math.max(1, ammo.rounds()));
+                slot.add(Math.max(1, ammo.nominalRounds()));
                 stack.shrink(1);
             }
         }
@@ -898,8 +982,10 @@ public class AircraftEntity extends FlyingMob {
         if (oldState != state) {
             stateTimer = 0;
             fireTimer = 0;
-            // 移除 targetRefreshTimer 的重置，让 refreshTarget() 自己管理计时器
-            if (state == AircraftState.RETURNING) clearAswGlow();
+            if (state == AircraftState.RETURNING) {
+                clearAswGlow();
+                recallTimer = 0;
+            }
         }
         this.entityData.set(DATA_STATE, state.name());
     }
@@ -919,6 +1005,7 @@ public class AircraftEntity extends FlyingMob {
             currentTarget = FireControlTarget.position(serverLevel, position);
         }
         attackSolution = null;
+        cachedReleaseLine = null;
         if (position != null) setState(AircraftState.LOCKED);
     }
 
@@ -930,6 +1017,7 @@ public class AircraftEntity extends FlyingMob {
     public void recallToOwner() {
         currentTarget = null;
         attackSolution = null;
+        cachedReleaseLine = null;
         dogfightTarget = null;
         setNoGravity(true);
         setState(AircraftState.RETURNING);
@@ -953,9 +1041,6 @@ public class AircraftEntity extends FlyingMob {
 
     public void setAirAmmoCount(int count) { airWeaponSlot.setCount(count); syncAmmoData(); }
 
-    @Nullable
-    public UUID getOwnerUUID() { return ownerUUID; }
-
     // ==================== NBT 序列化 ====================
 
     @Override
@@ -967,7 +1052,14 @@ public class AircraftEntity extends FlyingMob {
 
         // 恢复飞机规格
         if (compound.contains("Spec")) {
-            this.spec = AircraftSpec.load(compound.getCompound("Spec"));
+            try {
+                this.spec = AircraftSpec.load(compound.getCompound("Spec"));
+            } catch (IllegalArgumentException e) {
+                com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.warn(
+                        "Invalid saved aircraft spec for {}, using B-25 defaults: {}", getUUID(), e.getMessage());
+                this.spec = AircraftSpec.B25;
+            }
+            applySpecHealth(false);
         }
 
         if (compound.contains("SeaWeapon")) {
@@ -982,9 +1074,15 @@ public class AircraftEntity extends FlyingMob {
         if (compound.contains("OrbitX")) {
             this.orbitPoint = new Vec3(compound.getDouble("OrbitX"), compound.getDouble("OrbitY"), compound.getDouble("OrbitZ"));
         }
-        if (compound.contains("TargetX") && this.level() instanceof ServerLevel serverLevel) {
-            this.currentTarget = FireControlTarget.position(serverLevel,
-                    new Vec3(compound.getDouble("TargetX"), compound.getDouble("TargetY"), compound.getDouble("TargetZ")));
+        if (compound.contains("TargetX")) {
+            ResourceLocation dimensionId = ResourceLocation.tryParse(compound.getString("TargetDimension"));
+            if (dimensionId == null) dimensionId = this.level().dimension().location();
+            ResourceKey<Level> dimension = ResourceKey.create(Registries.DIMENSION,
+                    dimensionId);
+            UUID entityId = compound.hasUUID("TargetEntity") ? compound.getUUID("TargetEntity") : null;
+            this.currentTarget = FireControlTarget.restore(entityId,
+                    new Vec3(compound.getDouble("TargetX"), compound.getDouble("TargetY"), compound.getDouble("TargetZ")),
+                    dimension, compound.getLong("TargetCreatedTime"));
         }
 
         try { setState(AircraftState.valueOf(compound.getString("AircraftState"))); }
@@ -1012,11 +1110,18 @@ public class AircraftEntity extends FlyingMob {
         if (this.currentTarget != null) {
             Vec3 pos = currentTarget.fallbackPosition();
             compound.putDouble("TargetX", pos.x); compound.putDouble("TargetY", pos.y); compound.putDouble("TargetZ", pos.z);
+            compound.putString("TargetDimension", currentTarget.dimension().location().toString());
+            compound.putLong("TargetCreatedTime", currentTarget.createdGameTime());
+            if (currentTarget.entityId() != null) compound.putUUID("TargetEntity", currentTarget.entityId());
         }
     }
 
     /**
      * 获取飞机的所有者实体。
+     *
+     * <p><b>契约：</b>{@link #ownerUUID} 必须是召唤飞机玩家的 UUID，不是任意实体的 UUID。
+     * 这里返回的是 {@link ServerLevel#getEntity(UUID) 实际加载的实体}，可能为
+     * {@code Player}（正常情况）或者任何其他加载中的实体（数据异常时）。
      *
      * @return 所有者实体，如果找不到则返回 null
      */
@@ -1027,4 +1132,8 @@ public class AircraftEntity extends FlyingMob {
         }
         return serverLevel.getEntity(ownerUUID);
     }
+
+    /** 唯一标识召唤者（玩家）的 UUID。仅在客户端断网等异常情况下可能为 null。 */
+    @Nullable
+    public UUID getOwnerUUID() { return ownerUUID; }
 }

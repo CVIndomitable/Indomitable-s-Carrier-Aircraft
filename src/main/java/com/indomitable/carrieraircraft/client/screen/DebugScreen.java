@@ -14,6 +14,7 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -53,16 +54,14 @@ public class DebugScreen extends AbstractContainerScreen<DebugMenu> {
     private static final int SELECTED_BG   = 0xFF0F3460;
 
     private static final AircraftState[] ALL_STATES = AircraftState.values();
-    // 与 ALL_STATES 一一对应：STANDBY, ORBITING, LOCKED, APPROACH, ATTACKING, DROPPING, POST_ATTACK, DOGFIGHT, RETURNING
-    private static final String[] STATE_LABELS = {
-            "待命", "盘旋", "锁定", "赶赴", "攻击", "投弹", "复攻", "空战", "返航"
-    };
-    private static final boolean[] NEEDS_TARGET = {
-            false, true, true, true, true, true, true, true, false
-    };
-    private static final boolean[] NEEDS_START = {
-            false, false, true, true, true, true, true, true, true
-    };
+    /**
+     * M7：使用 {@link List} 而非数组，配合 {@link #requireStateFlag} 越界检查，
+     * 避免新增 {@link AircraftState} 后忘记同步数组而 NPE/AIOOBE。
+     */
+    private static final List<Boolean> NEEDS_TARGET = List.of(
+            false, true, true, true, true, true, true, true, false);
+    private static final List<Boolean> NEEDS_START = List.of(
+            false, false, true, true, true, true, true, true, true);
 
     private int selectedAircraft = 0;
     private int selectedState = 0;
@@ -104,7 +103,7 @@ public class DebugScreen extends AbstractContainerScreen<DebugMenu> {
             int bx = gridX + col * (btnW + gap);
             int by = gridY + row * (btnH + gap);
             addRenderableWidget(Button.builder(
-                    Component.literal(STATE_LABELS[i]),
+                    Component.translatable(ALL_STATES[i].translationKey()),
                     b -> selectState(idx)
             ).pos(bx, by).size(btnW, btnH).build());
         }
@@ -195,7 +194,8 @@ public class DebugScreen extends AbstractContainerScreen<DebugMenu> {
                 loopEnabled
         );
         PacketDistributor.sendToServer(pkt);
-        runStatus = "执行中 " + STATE_LABELS[selectedState] + (loopEnabled ? " [循环]" : "");
+        runStatus = "执行中 " + Component.translatable(ALL_STATES[selectedState].translationKey()).getString()
+                + (loopEnabled ? " [循环]" : "");
     }
 
     private void stopDebug() {
@@ -230,6 +230,12 @@ public class DebugScreen extends AbstractContainerScreen<DebugMenu> {
         g.fill(leftPos, topPos + 170, leftPos + imageWidth, topPos + 172, DIVIDER);
     }
 
+    private static boolean requireStateFlag(List<Boolean> flags, int index) {
+        if (index < 0 || index >= flags.size()) return false;
+        Boolean v = flags.get(index);
+        return v != null && v;
+    }
+
     @Override
     protected void renderLabels(GuiGraphics g, int mouseX, int mouseY) {
         // 标题
@@ -244,7 +250,7 @@ public class DebugScreen extends AbstractContainerScreen<DebugMenu> {
             String text = String.format("%s #%s %s",
                     info.role().displayName(),
                     info.uuid().toString().substring(0, 4),
-                    info.state().name());
+                    Component.translatable(info.state().translationKey()).getString());
             int tw = font.width(text);
             g.drawString(font, text, (imageWidth - tw) / 2, 17, TEXT_COLOR, false);
         }
@@ -263,8 +269,8 @@ public class DebugScreen extends AbstractContainerScreen<DebugMenu> {
         }
 
         // 坐标标签
-        boolean showStart = NEEDS_START[selectedState];
-        boolean showTarget = NEEDS_TARGET[selectedState];
+        boolean showStart = requireStateFlag(NEEDS_START, selectedState);
+        boolean showTarget = requireStateFlag(NEEDS_TARGET, selectedState);
 
         if (showStart) {
             g.drawString(font, "起点", 8, 89, TEXT_COLOR, false);
@@ -280,11 +286,13 @@ public class DebugScreen extends AbstractContainerScreen<DebugMenu> {
         g.drawString(font, "状态: " + runStatus, 8, 140, 0xFF90FF90, false);
 
         // 状态按钮下方的选中指示
-        int col = selectedState % 3;
-        int row = selectedState / 3;
-        int bx = leftPos + 8 + col * 82;
-        int by = topPos + 32 + row * 16;
-        g.fill(bx, by, bx + 80, by + 14, 0x4050C4FF);
+        if (selectedState >= 0 && selectedState < ALL_STATES.length) {
+            int col = selectedState % 3;
+            int row = selectedState / 3;
+            int bx = leftPos + 8 + col * 82;
+            int by = topPos + 32 + row * 16;
+            g.fill(bx, by, bx + 80, by + 14, 0x4050C4FF);
+        }
     }
 
     @Override
@@ -297,8 +305,8 @@ public class DebugScreen extends AbstractContainerScreen<DebugMenu> {
     @Override
     public void containerTick() {
         super.containerTick();
-        boolean showStart = NEEDS_START[selectedState];
-        boolean showTarget = NEEDS_TARGET[selectedState];
+        boolean showStart = requireStateFlag(NEEDS_START, selectedState);
+        boolean showTarget = requireStateFlag(NEEDS_TARGET, selectedState);
         startX.visible = showStart;
         startY.visible = showStart;
         startZ.visible = showStart;

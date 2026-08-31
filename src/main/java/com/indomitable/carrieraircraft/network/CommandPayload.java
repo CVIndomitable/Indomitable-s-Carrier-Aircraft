@@ -5,6 +5,7 @@ import com.indomitable.carrieraircraft.aircraft.AirDefenseMode;
 import com.indomitable.carrieraircraft.aircraft.AssignmentMode;
 import com.indomitable.carrieraircraft.aircraft.AutoLockMode;
 import com.indomitable.carrieraircraft.entity.AircraftEntity;
+import com.indomitable.carrieraircraft.entity.ai.AircraftState;
 import com.indomitable.carrieraircraft.firecontrol.CameraStateTracker;
 import com.indomitable.carrieraircraft.firecontrol.FireControlSystem;
 import com.indomitable.carrieraircraft.firecontrol.PlayerAirControlSettings;
@@ -21,52 +22,75 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
+import java.util.Map;
+
 /**
  * 客户端 → 服务端：控制终端 GUI 命令包。
  *
- * <p>所有命令通过一个 action 字节分发，避免注册多个 payload 类型。
+ * <p>所有命令通过一个 {@link Action} 枚举分发，按「是否修改设置」拆成两组：
+ * <ul>
+ *   <li>{@link Kind#SETTING}：会改 {@link PlayerAirControlSettings}，需 save + syncMenu；</li>
+ *   <li>{@link Kind#ACTION}：纯动作命令（召回/补给/视角切换等），不需要保存。</li>
+ * </ul>
+ * 这样取代原来的 byte-magic + 巨型 switch 写法，所有 action 编译期检查。
  */
-public record CommandPayload(byte action) implements CustomPacketPayload {
+public record CommandPayload(Action action) implements CustomPacketPayload {
 
-    // ── action 常量：循环 ──
-    public static final byte CYCLE_AUTO_LOCK = 0;
-    public static final byte CYCLE_ASSIGNMENT = 1;
-    public static final byte CYCLE_AIR_DEFENSE = 2;
-    public static final byte CYCLE_BOMBS_PER_PASS = 3;
-    public static final byte CYCLE_MIN_EFF_DAMAGE = 4;
-    public static final byte SET_RALLY_POINT = 5;
-    public static final byte RECALL_ALL = 6;
+    /**
+     * 控制终端支持的命令。
+     *
+     * <p>字段命名保持与早期 byte 常量语义一致；ordinal 不再作为 wire 格式使用，
+     * 改为通过 {@link StreamCodec} 显式编码枚举名，方便日后增删顺序调整。
+     */
+    public enum Action {
+        // ── 设置：cycle ──
+        CYCLE_AUTO_LOCK(Kind.SETTING),
+        CYCLE_ASSIGNMENT(Kind.SETTING),
+        CYCLE_AIR_DEFENSE(Kind.SETTING),
+        CYCLE_BOMBS_PER_PASS(Kind.SETTING),
+        CYCLE_MIN_EFF_DAMAGE(Kind.SETTING),
+        // ── 设置：直接设置 ──
+        SET_AUTO_LOCK_NEAREST(Kind.SETTING),
+        SET_AUTO_LOCK_STRONGEST(Kind.SETTING),
+        SET_AUTO_LOCK_FOCUS(Kind.SETTING),
+        SET_AUTO_LOCK_SPREAD(Kind.SETTING),
+        SET_AUTO_LOCK_TYPE_FILTER(Kind.SETTING),
+        SET_ASSIGN_FOCUS(Kind.SETTING),
+        SET_ASSIGN_SPREAD(Kind.SETTING),
+        SET_AIR_DEFENSE_SELF(Kind.SETTING),
+        SET_AIR_DEFENSE_ACTIVE(Kind.SETTING),
+        SET_AIR_DEFENSE_LOW(Kind.SETTING),
+        SET_BOMBS_1(Kind.SETTING),
+        SET_BOMBS_2(Kind.SETTING),
+        SET_BOMBS_3(Kind.SETTING),
+        SET_BOMBS_4(Kind.SETTING),
+        SET_MIN_DMG_0(Kind.SETTING),
+        SET_MIN_DMG_20(Kind.SETTING),
+        SET_MIN_DMG_40(Kind.SETTING),
+        SET_MIN_DMG_80(Kind.SETTING),
+        // ── 动作 ──
+        SET_RALLY_POINT(Kind.ACTION),
+        RECALL_ALL(Kind.ACTION),
+        REARM_ALL(Kind.ACTION),
+        ENTER_LEADER_CAMERA(Kind.ACTION),
+        EXIT_LEADER_CAMERA(Kind.ACTION);
 
-    // ── action 常量：直接设置（下拉菜单用）──
-    public static final byte SET_AUTO_LOCK_NEAREST = 7;
-    public static final byte SET_AUTO_LOCK_STRONGEST = 8;
-    public static final byte SET_AUTO_LOCK_FOCUS = 9;
-    public static final byte SET_AUTO_LOCK_SPREAD = 10;
-    public static final byte SET_AUTO_LOCK_TYPE_FILTER = 11;
-    public static final byte SET_ASSIGN_FOCUS = 12;
-    public static final byte SET_ASSIGN_SPREAD = 13;
-    public static final byte SET_AIR_DEFENSE_SELF = 14;
-    public static final byte SET_AIR_DEFENSE_ACTIVE = 15;
-    public static final byte SET_AIR_DEFENSE_LOW = 16;
-    public static final byte SET_BOMBS_1 = 17;
-    public static final byte SET_BOMBS_2 = 18;
-    public static final byte SET_BOMBS_3 = 19;
-    public static final byte SET_BOMBS_4 = 20;
-    public static final byte SET_MIN_DMG_0 = 21;
-    public static final byte SET_MIN_DMG_20 = 22;
-    public static final byte SET_MIN_DMG_40 = 23;
-    public static final byte SET_MIN_DMG_80 = 24;
-    public static final byte REARM_ALL = 25;
-    public static final byte ENTER_LEADER_CAMERA = 26;
-    public static final byte EXIT_LEADER_CAMERA = 27;
+        public enum Kind { SETTING, ACTION }
+
+        private final Kind kind;
+
+        Action(Kind kind) { this.kind = kind; }
+
+        public Kind kind() { return kind; }
+    }
 
     public static final Type<CommandPayload> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(IndomitableCarrierAircraft.MOD_ID, "terminal_cmd"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, CommandPayload> CODEC =
             StreamCodec.of(
-                    (buf, pkt) -> buf.writeByte(pkt.action),
-                    buf -> new CommandPayload(buf.readByte())
+                    (buf, pkt) -> buf.writeUtf(pkt.action.name()),
+                    buf -> new CommandPayload(Action.valueOf(buf.readUtf()))
             );
 
     @Override
@@ -91,51 +115,50 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
                 && player.containerMenu.stillValid(player);
     }
 
-    private static void executeAction(ServerPlayer player, byte action) {
+    /** 旧 byte 常量索引 → 新枚举，方便客户端 payload 构造处继续兼容。 */
+    private static final Map<Byte, Action> LEGACY_BYTE_MAP = buildLegacyByteMap();
+
+    private static Map<Byte, Action> buildLegacyByteMap() {
+        // 旧 byte 序号（0-27）与新枚举的 1:1 映射。顺序与旧 CommandPayload 完全一致。
+        Map<Byte, Action> m = new java.util.HashMap<>();
+        Action[] values = Action.values();
+        for (byte b = 0; b < values.length && b <= 27; b++) {
+            m.put(b, values[b]);
+        }
+        return m;
+    }
+
+    /** 旧 byte 兼容：客户端若按老格式发 byte 过来，可走这条解码路径。 */
+    public static CommandPayload fromLegacyByte(byte legacy) {
+        Action mapped = LEGACY_BYTE_MAP.get(legacy);
+        return new CommandPayload(mapped != null ? mapped : Action.RECALL_ALL);
+    }
+
+    private static void executeAction(ServerPlayer player, Action action) {
         FireControlSystem fireControl = FireControlSystem.getInstance();
         PlayerAirControlSettings settings = fireControl.settings(player.serverLevel(), player.getUUID());
 
         switch (action) {
             case CYCLE_AUTO_LOCK -> {
-                AutoLockMode mode = settings.cycleAutoLockMode();
-                player.sendSystemMessage(Component.literal("自动锁定: " + mode.displayName()).withStyle(ChatFormatting.GREEN));
+                AutoLockMode m = settings.cycleAutoLockMode();
+                player.sendSystemMessage(Component.literal("自动锁定: " + m.displayName()).withStyle(ChatFormatting.GREEN));
             }
             case CYCLE_ASSIGNMENT -> {
-                AssignmentMode mode = settings.cycleAssignmentMode();
-                player.sendSystemMessage(Component.literal("目标分配: " + mode.displayName()).withStyle(ChatFormatting.GREEN));
+                AssignmentMode m = settings.cycleAssignmentMode();
+                player.sendSystemMessage(Component.literal("目标分配: " + m.displayName()).withStyle(ChatFormatting.GREEN));
             }
             case CYCLE_AIR_DEFENSE -> {
-                AirDefenseMode mode = settings.cycleAirDefenseMode();
-                player.sendSystemMessage(Component.literal("对空模式: " + mode.displayName()).withStyle(ChatFormatting.GREEN));
+                AirDefenseMode m = settings.cycleAirDefenseMode();
+                player.sendSystemMessage(Component.literal("对空模式: " + m.displayName()).withStyle(ChatFormatting.GREEN));
             }
             case CYCLE_BOMBS_PER_PASS -> {
-                int val = settings.cycleBombsPerPass();
-                player.sendSystemMessage(Component.literal("投弹数量: " + val).withStyle(ChatFormatting.GREEN));
+                int v = settings.cycleBombsPerPass();
+                player.sendSystemMessage(Component.literal("投弹数量: " + v).withStyle(ChatFormatting.GREEN));
             }
             case CYCLE_MIN_EFF_DAMAGE -> {
-                float val = settings.cycleMinimumEffectiveDamage();
-                player.sendSystemMessage(Component.literal("最小有效伤害: " + (int) val).withStyle(ChatFormatting.GREEN));
+                float v = settings.cycleMinimumEffectiveDamage();
+                player.sendSystemMessage(Component.literal("最小有效伤害: " + (int) v).withStyle(ChatFormatting.GREEN));
             }
-            case SET_RALLY_POINT -> {
-                ServerLevel level = player.serverLevel();
-                Vec3 point = player.pick(240.0, 0, false).getLocation().add(0, 18.0, 0);
-                int count = FormationManager.getInstance().deployToRallyPoint(level, player.getUUID(), point);
-                player.sendSystemMessage(Component.literal(
-                        String.format("盘旋点已设置 (%.0f, %.0f, %.0f)，%d 架飞机转入 ORBITING",
-                                point.x, point.y, point.z, count)
-                ).withStyle(ChatFormatting.AQUA));
-            }
-            case RECALL_ALL -> {
-                int count = FormationManager.getInstance().recall(player.serverLevel(), player.getUUID());
-                player.sendSystemMessage(Component.literal("已召回 " + count + " 架飞机").withStyle(ChatFormatting.YELLOW));
-            }
-            case REARM_ALL -> {
-                int count = FormationManager.getInstance().rearmAll(player.serverLevel(), player);
-                player.sendSystemMessage(Component.literal("已补给 " + count + " 架飞机").withStyle(ChatFormatting.AQUA));
-            }
-            case ENTER_LEADER_CAMERA -> enterLeaderCamera(player);
-            case EXIT_LEADER_CAMERA -> exitLeaderCamera(player);
-            // ── 直接设置（下拉菜单）──
             case SET_AUTO_LOCK_NEAREST -> setAutoLock(player, settings, AutoLockMode.NEAREST);
             case SET_AUTO_LOCK_STRONGEST -> setAutoLock(player, settings, AutoLockMode.STRONGEST);
             case SET_AUTO_LOCK_FOCUS -> setAutoLock(player, settings, AutoLockMode.FOCUS);
@@ -154,11 +177,35 @@ public record CommandPayload(byte action) implements CustomPacketPayload {
             case SET_MIN_DMG_20 -> { settings.setMinimumEffectiveDamage(20.0F); player.sendSystemMessage(Component.literal("最小有效伤害: 20").withStyle(ChatFormatting.GREEN)); }
             case SET_MIN_DMG_40 -> { settings.setMinimumEffectiveDamage(40.0F); player.sendSystemMessage(Component.literal("最小有效伤害: 40").withStyle(ChatFormatting.GREEN)); }
             case SET_MIN_DMG_80 -> { settings.setMinimumEffectiveDamage(80.0F); player.sendSystemMessage(Component.literal("最小有效伤害: 80").withStyle(ChatFormatting.GREEN)); }
+            // ── 动作命令 ──
+            case SET_RALLY_POINT -> {
+                ServerLevel lvl = player.serverLevel();
+                Vec3 point = player.pick(FireControlSystem.RALLY_POINT_LOOK_DISTANCE, 0, false).getLocation()
+                        .add(0, FireControlSystem.RALLY_POINT_HEIGHT_OFFSET, 0);
+                int n = FormationManager.getInstance().deployToRallyPoint(lvl, player.getUUID(), point);
+                player.sendSystemMessage(Component.literal(String.format(
+                                "盘旋点已设置 (%.0f, %.0f, %.0f)，%d 架飞机转入 ",
+                                point.x, point.y, point.z, n))
+                        .append(Component.translatable(AircraftState.ORBITING.translationKey()))
+                        .withStyle(ChatFormatting.AQUA));
+            }
+            case RECALL_ALL -> {
+                int n = FormationManager.getInstance().recall(player.serverLevel(), player.getUUID());
+                player.sendSystemMessage(Component.literal("已召回 " + n + " 架飞机").withStyle(ChatFormatting.YELLOW));
+            }
+            case REARM_ALL -> {
+                int n = FormationManager.getInstance().rearmAll(player.serverLevel(), player);
+                player.sendSystemMessage(Component.literal("已补给 " + n + " 架飞机").withStyle(ChatFormatting.AQUA));
+            }
+            case ENTER_LEADER_CAMERA -> enterLeaderCamera(player);
+            case EXIT_LEADER_CAMERA -> exitLeaderCamera(player);
         }
 
-        // 同步设置到 ContainerData，客户端 GUI 实时刷新
-        fireControl.saveSettings(player.serverLevel(), player.getUUID());
-        syncMenu(player, settings);
+        // I5/M3：仅 SETTING 命令需要 save + syncMenu；动作命令不再做无意义的 settings 同步
+        if (action.kind() == Action.Kind.SETTING) {
+            fireControl.saveSettings(player.serverLevel(), player.getUUID());
+            syncMenu(player, settings);
+        }
     }
 
     private static void syncMenu(ServerPlayer player, PlayerAirControlSettings settings) {

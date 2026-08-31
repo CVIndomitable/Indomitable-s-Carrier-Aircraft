@@ -1,7 +1,10 @@
 package com.indomitable.carrieraircraft.entity;
 
+import com.indomitable.carrieraircraft.aircraft.AmmoType;
+import com.indomitable.carrieraircraft.aircraft.SeaAttackMode;
 import com.indomitable.carrieraircraft.combat.HitNotifier;
 import com.indomitable.carrieraircraft.registry.ModEntityTypes;
+import com.indomitable.carrieraircraft.targeting.FriendlyFireFilter;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -9,19 +12,23 @@ import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.level.Level;
+import net.minecraft.world.level.Explosion;
 import net.minecraft.world.level.ExplosionDamageCalculator;
-import net.minecraft.world.level.SimpleExplosionDamageCalculator;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
-import java.util.Optional;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -38,12 +45,59 @@ import java.util.UUID;
  * 3. 最后更新位置
  */
 public class BombEntity extends Entity {
+
+    /**
+     * 弹道类型，决定 {@link BombEntity} 在 {@code tick()} 中应用哪一套物理模型。
+     *
+     * <p>取代旧的 {@code String weaponType}：所有引用都是编译期检查的枚举常量，避免拼写错误。
+     */
+    public enum WeaponType {
+        /** 自由落体航弹（水平轰炸也是这一类，仅靠散布函数模拟精度）。 */
+        AERIAL_BOMB,
+        /** 俯冲轰炸：短时间追踪目标实体。 */
+        GUIDED_BOMB,
+        /** 鱼雷：入水后定深自走。 */
+        AERIAL_TORPEDO,
+        /** 火箭弹：自走直线弹道。 */
+        ROCKET;
+
+        /**
+         * 根据对海槽弹药类型 + 攻击模式推导 {@link WeaponType}。
+         *
+         * <p>对海攻击模式包含 {@link SeaAttackMode#DIVE_BOMBING} 时升级为 {@link #GUIDED_BOMB}；
+         * 其它情况直接映射为对应枚举。
+         */
+        public static WeaponType derive(AmmoType ammoType, java.util.Collection<SeaAttackMode> seaAttackModes) {
+            if (ammoType == AmmoType.AERIAL_BOMB && seaAttackModes.contains(SeaAttackMode.DIVE_BOMBING)) {
+                return GUIDED_BOMB;
+            }
+            return switch (ammoType) {
+                case AERIAL_BOMB    -> AERIAL_BOMB;
+                case AERIAL_TORPEDO -> AERIAL_TORPEDO;
+                case ROCKET         -> ROCKET;
+                default             -> AERIAL_BOMB;
+            };
+        }
+
+        /** 兼容旧 NBT：从存档中读到的字符串还原枚举；无法识别时回落到 {@link #AERIAL_BOMB}。 */
+        public static WeaponType fromLegacyString(String raw) {
+            if (raw == null || raw.isEmpty()) return AERIAL_BOMB;
+            try {
+                return WeaponType.valueOf(raw);
+            } catch (IllegalArgumentException e) {
+                // 旧版本可能写入 "GUIDED_BOMB" 之外的别名（如 "DIVE_BOMB"）；保留兜底。
+                return AERIAL_BOMB;
+            }
+        }
+    }
+
     private static final EntityDataAccessor<Float> DATA_EXPLOSION_RADIUS =
             SynchedEntityData.defineId(BombEntity.class, EntityDataSerializers.FLOAT);
 
     private static final EntityDataAccessor<Float> DATA_DAMAGE =
             SynchedEntityData.defineId(BombEntity.class, EntityDataSerializers.FLOAT);
 
+    /** 内部使用枚举；底层仍以字符串序列化以兼容旧存档。 */
     private static final EntityDataAccessor<String> DATA_WEAPON_TYPE =
             SynchedEntityData.defineId(BombEntity.class, EntityDataSerializers.STRING);
 
@@ -56,9 +110,9 @@ public class BombEntity extends Entity {
     /** 最大存活时间 (ticks)，防止卡住 */
     private static final int MAX_LIFETIME = 400; // 20秒
 
-    /** 爆炸只破坏方块（受 mobGriefing 规则约束）；实体伤害由 explode() 里的衰减公式控制，避免双重伤害 */
-    private static final ExplosionDamageCalculator BLOCK_ONLY_EXPLOSION =
-            new SimpleExplosionDamageCalculator(true, false, Optional.empty(), Optional.empty());
+    /** 爆炸只破坏方块（受 mobGriefing 规则约束）；实体伤害由 BombExplosionDamageCalculator 控制。
+     *  这里使用默认计算器（damagesEntities=false），实际伤害在 explode() 中通过自定义计算器应用。 */
+    private static final ExplosionDamageCalculator BLOCK_ONLY_EXPLOSION = new BlockOnlyExplosionDamageCalculator();
 
     /** 注意不要与 Entity#tickCount 同名，否则会遮蔽父类字段 */
     private int lifeTicks = 0;
@@ -82,17 +136,18 @@ public class BombEntity extends Entity {
 
     /** 便捷构造函数：用于投弹 */
     public BombEntity(Level level, Vec3 position, Vec3 initialVelocity, float explosionRadius, float damage) {
-        this(level, position, initialVelocity, explosionRadius, damage, "AERIAL_BOMB");
+        this(level, position, initialVelocity, explosionRadius, damage, WeaponType.AERIAL_BOMB);
     }
 
     /** 便捷构造函数：用于投放不同航空弹药 */
-    public BombEntity(Level level, Vec3 position, Vec3 initialVelocity, float explosionRadius, float damage, String weaponType) {
+    public BombEntity(Level level, Vec3 position, Vec3 initialVelocity, float explosionRadius, float damage,
+                      WeaponType weaponType) {
         this(level, position, initialVelocity, explosionRadius, damage, weaponType, null);
     }
 
     /** 便捷构造函数：用于需要追踪实体目标的弹药。 */
     public BombEntity(Level level, Vec3 position, Vec3 initialVelocity, float explosionRadius, float damage,
-                      String weaponType, UUID targetUUID) {
+                      WeaponType weaponType, UUID targetUUID) {
         this(ModEntityTypes.BOMB.get(), level);
         this.setPos(position);
         this.setDeltaMovement(initialVelocity);
@@ -106,7 +161,7 @@ public class BombEntity extends Entity {
     protected void defineSynchedData(SynchedEntityData.Builder builder) {
         builder.define(DATA_EXPLOSION_RADIUS, 3.0F);
         builder.define(DATA_DAMAGE, 20.0F);
-        builder.define(DATA_WEAPON_TYPE, "AERIAL_BOMB");
+        builder.define(DATA_WEAPON_TYPE, WeaponType.AERIAL_BOMB.name());
     }
 
     @Override
@@ -133,15 +188,12 @@ public class BombEntity extends Entity {
 
     /** 应用物理模拟 */
     private void applyPhysics() {
-        String type = this.getWeaponType();
-        if ("GUIDED_BOMB".equals(type)) {
-            applyGuidedBombPhysics();
-        } else if ("AERIAL_TORPEDO".equals(type)) {
-            applyTorpedoPhysics();
-        } else if ("ROCKET".equals(type)) {
-            applyRocketPhysics();
-        } else {
-            applyFreeFallPhysics();
+        WeaponType type = this.getWeaponType();
+        switch (type) {
+            case GUIDED_BOMB -> applyGuidedBombPhysics();
+            case AERIAL_TORPEDO -> applyTorpedoPhysics();
+            case ROCKET -> applyRocketPhysics();
+            case AERIAL_BOMB -> applyFreeFallPhysics();
         }
     }
 
@@ -226,10 +278,27 @@ public class BombEntity extends Entity {
             }
         }
 
-        // 检查是否碰撞实体（不与投弹的飞机和其他弹药相互引爆）
+        // 检查是否碰撞实体。M19：不再一刀切排除所有 AircraftEntity，
+        // 改为对友军飞机（包含本机 source）保留，对敌方飞机正常引爆。
         AABB aabb = this.getBoundingBox().inflate(0.5);
-        return !this.level().getEntities(this, aabb,
-                e -> e != this && !(e instanceof BombEntity) && !(e instanceof AircraftEntity)).isEmpty();
+        Entity sourceAircraft = resolveSourceAircraft();
+        return !this.level().getEntities(this, aabb, e -> {
+            if (e == this) return false;
+            if (e instanceof BombEntity) return false;
+            if (e instanceof AircraftEntity aircraft) {
+                if (sourceAircraft instanceof AircraftEntity src) {
+                    // 友军飞机不引爆；敌方飞机正常引爆
+                    return FriendlyFireFilter.canAttack(src, aircraft);
+                }
+                return true;
+            }
+            return true;
+        }).isEmpty();
+    }
+
+    private Entity resolveSourceAircraft() {
+        if (sourceAircraftUUID == null || !(level() instanceof ServerLevel sl)) return null;
+        return sl.getEntity(sourceAircraftUUID);
     }
 
     private boolean hasSolidCollision(BlockPos pos) {
@@ -253,52 +322,42 @@ public class BombEntity extends Entity {
 
         // 获取玩家所有者
         Player player = null;
+        Entity ownerEntity = null;
         if (ownerUUID != null && level() instanceof ServerLevel serverLevel) {
-            Entity ownerEntity = serverLevel.getEntity(ownerUUID);
+            ownerEntity = serverLevel.getEntity(ownerUUID);
             if (ownerEntity instanceof Player p) {
                 player = p;
             }
         }
 
+        // 1. 收集通过敌我识别的目标，并记录爆炸前的存活状态
         AABB damageBox = this.getBoundingBox().inflate(radius);
+        Map<UUID, LivingEntity> validTargets = new HashMap<>();
+        Map<UUID, Boolean> aliveBefore = new HashMap<>();
         for (LivingEntity target : this.level().getEntitiesOfClass(LivingEntity.class, damageBox, LivingEntity::isAlive)) {
-            if (target instanceof AircraftEntity) {
-                continue;
-            }
-            double distance = target.distanceTo(this);
-            if (distance > radius) {
-                continue;
-            }
-            float scaledDamage = (float) (damage * (1.0 - distance / (radius + 1.0)));
-            if (scaledDamage <= 0.0F) {
-                continue;
-            }
-
-            // 记录伤害前的状态
-            boolean wasAlive = target.isAlive();
-
-            // 应用伤害
-            Entity damageSource = this;
-            if (sourceAircraftUUID != null && level() instanceof ServerLevel sl) {
-                Entity aircraft = sl.getEntity(sourceAircraftUUID);
-                if (aircraft != null) {
-                    damageSource = aircraft;
-                }
-            }
-            target.hurt(this.damageSources().explosion(damageSource, ownerUUID != null && level() instanceof ServerLevel sl ? sl.getEntity(ownerUUID) : null), scaledDamage);
-
-            // 命中反馈
-            if (player != null && wasAlive) {
-                boolean killed = !target.isAlive() || target.getHealth() <= 0.0F;
-                notifyOwner(player, target, killed);
-            }
+            if (!passesFriendlyFire(target, ownerEntity)) continue;
+            validTargets.put(target.getUUID(), target);
+            aliveBefore.put(target.getUUID(), target.isAlive());
         }
 
-        // 爆炸只负责方块破坏、视效与击退；MOB 模式受 mobGriefing 游戏规则约束
+        // 2. 构造伤害来源（投弹飞机 → 玩家）
+        Entity damageSource = this;
+        if (sourceAircraftUUID != null && level() instanceof ServerLevel sl) {
+            Entity aircraft = sl.getEntity(sourceAircraftUUID);
+            if (aircraft != null) {
+                damageSource = aircraft;
+            }
+        }
+        DamageSource source = this.damageSources().explosion(damageSource, ownerEntity);
+
+        // 3. 通过自定义计算器执行爆炸：
+        //    - 距离衰减公式封装在 BombExplosionDamageCalculator
+        //    - 友军保护通过预校验的 allowedTargets 集合实现
+        Set<UUID> allowedIds = new HashSet<>(validTargets.keySet());
         this.level().explode(
                 this,
-                null,
-                BLOCK_ONLY_EXPLOSION,
+                source,
+                new BombExplosionDamageCalculator(damage, radius, allowedIds),
                 this.getX(),
                 this.getY(),
                 this.getZ(),
@@ -307,7 +366,73 @@ public class BombEntity extends Entity {
                 Level.ExplosionInteraction.MOB
         );
 
+        // 4. 发送命中/击杀反馈
+        if (player != null) {
+            for (LivingEntity target : validTargets.values()) {
+                Boolean wasAlive = aliveBefore.get(target.getUUID());
+                if (wasAlive == null || !wasAlive) continue;
+                boolean killed = !target.isAlive() || target.getHealth() <= 0.0F;
+                notifyOwner(player, target, killed);
+            }
+        }
+
         this.discard();
+    }
+
+    /** 校验敌我识别：友军飞机一律排除，友军玩家/召唤物通过 FriendlyFireFilter 过滤。 */
+    private boolean passesFriendlyFire(LivingEntity target, Entity ownerEntity) {
+        if (target instanceof AircraftEntity) {
+            Entity source = sourceAircraftUUID != null && level() instanceof ServerLevel sl
+                    ? sl.getEntity(sourceAircraftUUID) : null;
+            if (source instanceof AircraftEntity aircraft
+                    && !FriendlyFireFilter.canAttack(aircraft, target)) {
+                return false;
+            }
+        }
+        if (ownerUUID != null && !FriendlyFireFilter.canPlayerDamage(ownerUUID, ownerEntity, target)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 自定义爆炸伤害计算器：仅对预校验通过的实体应用距离衰减伤害。
+     *
+     * <p>由 {@link #explode()} 在调用 {@code level.explode()} 时传入，避免在主循环里手动 {@code target.hurt()}。
+     */
+    private static final class BombExplosionDamageCalculator extends ExplosionDamageCalculator {
+        private final float baseDamage;
+        private final float radius;
+        private final Set<UUID> allowedTargets;
+
+        BombExplosionDamageCalculator(float baseDamage, float radius, Set<UUID> allowedTargets) {
+            this.baseDamage = baseDamage;
+            this.radius = radius;
+            this.allowedTargets = allowedTargets;
+        }
+
+        @Override
+        public boolean shouldDamageEntity(Explosion explosion, Entity entity) {
+            if (!(entity instanceof LivingEntity living) || !living.isAlive()) return false;
+            return allowedTargets.contains(entity.getUUID());
+        }
+
+        @Override
+        public float getEntityDamageAmount(Explosion explosion, Entity entity) {
+            double distance = Math.sqrt(entity.distanceToSqr(explosion.center()));
+            if (distance > radius) return 0.0F;
+            float falloff = 1.0F - (float) (distance / (radius + 1.0));
+            float scaled = baseDamage * falloff;
+            return Math.max(0.0F, scaled);
+        }
+    }
+
+    /** 爆炸仅破坏方块、视效、击退的占位计算器；实体伤害由 {@link BombExplosionDamageCalculator} 负责。 */
+    private static final class BlockOnlyExplosionDamageCalculator extends ExplosionDamageCalculator {
+        @Override
+        public boolean shouldDamageEntity(Explosion explosion, Entity entity) {
+            return false;
+        }
     }
 
     /**
@@ -326,7 +451,16 @@ public class BombEntity extends Entity {
                 ? "message.indomitablecarrieraircraft.weapon_kill"
                 : "message.indomitablecarrieraircraft.weapon_hit";
 
-        HitNotifier.send(player, Component.translatable(key, weaponName, target.getDisplayName()));
+        // M13：避免翻译键缺失时直接回显 key 字符串（污染聊天）。
+        Component body;
+        try {
+            body = Component.translatable(key, weaponName, target.getDisplayName());
+        } catch (Exception e) {
+            com.indomitable.carrieraircraft.IndomitableCarrierAircraft.LOGGER.warn(
+                    "Failed to localize hit feedback key '{}'", key, e);
+            body = Component.literal((killed ? "[击杀] " : "[命中] ") + target.getDisplayName().getString());
+        }
+        HitNotifier.send(player, body);
     }
 
     // ==================== Getter/Setter ====================
@@ -347,12 +481,12 @@ public class BombEntity extends Entity {
         this.entityData.set(DATA_DAMAGE, damage);
     }
 
-    public String getWeaponType() {
-        return this.entityData.get(DATA_WEAPON_TYPE);
+    public WeaponType getWeaponType() {
+        return WeaponType.fromLegacyString(this.entityData.get(DATA_WEAPON_TYPE));
     }
 
-    public void setWeaponType(String weaponType) {
-        this.entityData.set(DATA_WEAPON_TYPE, weaponType);
+    public void setWeaponType(WeaponType weaponType) {
+        this.entityData.set(DATA_WEAPON_TYPE, weaponType.name());
     }
 
     /**
@@ -424,7 +558,7 @@ public class BombEntity extends Entity {
             this.setDamage(compound.getFloat("Damage"));
         }
         if (compound.contains("WeaponType")) {
-            this.setWeaponType(compound.getString("WeaponType"));
+            this.setWeaponType(WeaponType.fromLegacyString(compound.getString("WeaponType")));
         }
     }
 
@@ -446,6 +580,6 @@ public class BombEntity extends Entity {
         }
         compound.putFloat("ExplosionRadius", this.getExplosionRadius());
         compound.putFloat("Damage", this.getDamage());
-        compound.putString("WeaponType", this.getWeaponType());
+        compound.putString("WeaponType", this.getWeaponType().name());
     }
 }

@@ -4,8 +4,8 @@ import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
 import com.indomitable.carrieraircraft.firecontrol.FireControlSystem;
 import com.indomitable.carrieraircraft.firecontrol.FireControlTarget;
 import com.indomitable.carrieraircraft.menu.ControlTerminalMenu;
+import com.indomitable.carrieraircraft.targeting.FriendlyFireFilter;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.BlockPos;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.codec.StreamCodec;
@@ -59,15 +59,16 @@ public record AddTargetPayload(double x, double y, double z) implements CustomPa
             }
             ServerLevel level = player.serverLevel();
             Vec3 pos = new Vec3(payload.x, payload.y, payload.z);
-            if (!level.getWorldBorder().isWithinBounds(BlockPos.containing(pos))) {
-                player.sendSystemMessage(Component.literal("目标坐标超出世界边界").withStyle(ChatFormatting.RED));
+            FireControlSystem fireControl = FireControlSystem.getInstance();
+            if (!fireControl.isValidCoordinateTarget(player, pos)) {
+                player.sendSystemMessage(Component.literal("目标坐标超出有效锁定范围").withStyle(ChatFormatting.RED));
                 return;
             }
 
             // 检查方块目标附近 1 格内是否有实体
             FireControlTarget target = findNearbyEntityOrPosition(level, player, pos);
 
-            FireControlSystem.getInstance().addTarget(player, target);
+            fireControl.addTarget(player, target);
             if (target.isEntityTarget()) {
                 player.sendSystemMessage(Component.literal(
                         String.format("已锁定实体目标 (%.0f, %.0f, %.0f)", payload.x, payload.y, payload.z))
@@ -87,7 +88,8 @@ public record AddTargetPayload(double x, double y, double z) implements CustomPa
     private static FireControlTarget findNearbyEntityOrPosition(ServerLevel level, ServerPlayer player, Vec3 pos) {
         AABB searchBox = new AABB(pos.x - 1, pos.y - 1, pos.z - 1, pos.x + 1, pos.y + 1, pos.z + 1);
         List<LivingEntity> entities = level.getEntitiesOfClass(LivingEntity.class, searchBox,
-                entity -> entity.isAlive() && entity != player && !(entity instanceof Player));
+                entity -> !(entity instanceof Player)
+                        && FriendlyFireFilter.canPlayerTarget(player.getUUID(), entity));
 
         if (!entities.isEmpty()) {
             // 选择最近的实体

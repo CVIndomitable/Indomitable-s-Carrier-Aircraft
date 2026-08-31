@@ -3,6 +3,7 @@ package com.indomitable.carrieraircraft.formation;
 import com.indomitable.carrieraircraft.aircraft.SquadronType;
 import com.indomitable.carrieraircraft.data.CarrierAircraftSavedData;
 import com.indomitable.carrieraircraft.entity.AircraftEntity;
+import com.indomitable.carrieraircraft.firecontrol.FireControlSystem;
 import com.indomitable.carrieraircraft.firecontrol.FireControlTarget;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -16,6 +17,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -27,7 +29,7 @@ public final class FormationManager {
     private static final double ASSEMBLY_RADIUS = 32.0;
 
     private final Map<UUID, List<UUID>> playerAircraft = new HashMap<>();
-    private final Map<UUID, Vec3> rallyPoints = new HashMap<>();
+    private final Map<UUID, CarrierAircraftSavedData.RallyPoint> rallyPoints = new HashMap<>();
     private final Map<UUID, UUID> leaderAircraft = new HashMap<>();
     private final Map<UUID, Map<UUID, String>> aircraftGroups = new HashMap<>();
     private final Map<UUID, Set<String>> groupNames = new HashMap<>();
@@ -40,6 +42,22 @@ public final class FormationManager {
 
     public static FormationManager getInstance() {
         return INSTANCE;
+    }
+
+    /**
+     * 集中调度：每 40 tick 由本方法统一调用一次 leader chunk loading + prune。
+     * 飞机 tick 不再各自调用，避免重复扫描。
+     */
+    private static final int MAINTENANCE_INTERVAL = 40;
+    private long lastMaintenanceTick = Long.MIN_VALUE;
+
+    public void tickMaintenance(ServerLevel level, long gameTime) {
+        if (gameTime - lastMaintenanceTick < MAINTENANCE_INTERVAL) return;
+        lastMaintenanceTick = gameTime;
+        for (UUID ownerId : playerAircraft.keySet()) {
+            updateLeaderChunkLoading(level, ownerId);
+            pruneForOwner(level, ownerId);
+        }
     }
 
     public void registerAircraft(UUID ownerId, AircraftEntity aircraft) {
@@ -97,7 +115,7 @@ public final class FormationManager {
 
     public int deployToRallyPoint(ServerLevel level, UUID ownerId, Vec3 rallyPoint) {
         loadPlayerData(level, ownerId);
-        rallyPoints.put(ownerId, rallyPoint);
+        rallyPoints.put(ownerId, new CarrierAircraftSavedData.RallyPoint(level.dimension(), rallyPoint));
         int count = 0;
         for (AircraftEntity aircraft : getAircraft(level, ownerId)) {
             aircraft.setOrbitPoint(rallyPoint);
@@ -108,8 +126,10 @@ public final class FormationManager {
     }
 
     @Nullable
-    public Vec3 getRallyPoint(UUID ownerId) {
-        return rallyPoints.get(ownerId);
+    public Vec3 getRallyPoint(ServerLevel level, UUID ownerId) {
+        loadPlayerData(level, ownerId);
+        CarrierAircraftSavedData.RallyPoint rally = rallyPoints.get(ownerId);
+        return rally != null && rally.dimension().equals(level.dimension()) ? rally.position() : null;
     }
 
     @Nullable
@@ -197,7 +217,7 @@ public final class FormationManager {
      */
     public boolean isReadyForSortie(ServerLevel level, UUID ownerId, UUID aircraftUUID) {
         loadPlayerData(level, ownerId);
-        Vec3 rally = rallyPoints.get(ownerId);
+        Vec3 rally = getRallyPoint(level, ownerId);
         if (rally == null) {
             return true;
         }
@@ -258,7 +278,7 @@ public final class FormationManager {
         }
 
         ChunkPos center = leader.chunkPosition();
-        Set<Long> desired = new HashSet<>();
+        Set<Long> desired = new HashSet<>((2 * LEADER_CHUNK_RADIUS + 1) * (2 * LEADER_CHUNK_RADIUS + 1));
         for (int dx = -LEADER_CHUNK_RADIUS; dx <= LEADER_CHUNK_RADIUS; dx++) {
             for (int dz = -LEADER_CHUNK_RADIUS; dz <= LEADER_CHUNK_RADIUS; dz++) {
                 desired.add(ChunkPos.asLong(center.x + dx, center.z + dz));
@@ -274,15 +294,18 @@ public final class FormationManager {
 
         Set<Long> previous;
         if (record == null) {
-            previous = new HashSet<>();
+            previous = new HashSet<>(desired.size());
             forcedLeaderChunks.put(ownerId, new ForcedChunkRecord(dimension, previous));
         } else {
             previous = record.chunks();
         }
-        for (Long packed : new HashSet<>(previous)) {
+        // 复用 HashSet 而非每次新建 ArrayList；维护成本是 O(|previous|)
+        Iterator<Long> it = previous.iterator();
+        while (it.hasNext()) {
+            Long packed = it.next();
             if (!desired.contains(packed)) {
                 level.setChunkForced(chunkX(packed), chunkZ(packed), false);
-                previous.remove(packed);
+                it.remove();
             }
         }
         for (Long packed : desired) {
@@ -290,6 +313,11 @@ public final class FormationManager {
                 level.setChunkForced(chunkX(packed), chunkZ(packed), true);
             }
         }
+    }
+
+    /** 集中调用：避免每架飞机各自 prune 触发 O(N²) 行为。 */
+    public void pruneForOwner(ServerLevel level, UUID ownerId) {
+        FireControlSystem.getInstance().pruneStaleTargets(ownerId, level);
     }
 
     public int getForcedChunkCount(UUID ownerId) {

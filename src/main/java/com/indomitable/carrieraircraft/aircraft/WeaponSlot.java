@@ -1,5 +1,6 @@
 package com.indomitable.carrieraircraft.aircraft;
 
+import com.indomitable.carrieraircraft.IndomitableCarrierAircraft;
 import net.minecraft.nbt.CompoundTag;
 
 public final class WeaponSlot {
@@ -9,8 +10,8 @@ public final class WeaponSlot {
 
     public WeaponSlot(AmmoType ammoType, int count, int capacity) {
         this.ammoType = ammoType;
-        this.count = Math.max(0, count);
-        this.capacity = Math.max(0, capacity);
+        this.count = requireNonNegative("count", count);
+        this.capacity = requireNonNegative("capacity", capacity);
         clamp();
     }
 
@@ -27,7 +28,7 @@ public final class WeaponSlot {
     }
 
     public void setCount(int count) {
-        this.count = Math.max(0, count);
+        this.count = requireNonNegative("count", count);
         clamp();
     }
 
@@ -68,13 +69,33 @@ public final class WeaponSlot {
                 type = fallbackType;
             }
         }
-        int capacity = tag.contains("Capacity") ? tag.getInt("Capacity") : fallbackCapacity;
-        return new WeaponSlot(type, tag.getInt("Count"), capacity);
+        int rawCapacity = tag.contains("Capacity") ? tag.getInt("Capacity") : fallbackCapacity;
+        int capacity = Math.max(0, rawCapacity);
+        if (capacity != rawCapacity) {
+            IndomitableCarrierAircraft.LOGGER.warn(
+                    "WeaponSlot capacity {} out of range, clamped to {}", rawCapacity, capacity);
+        }
+        int rawCount = tag.contains("Count") ? tag.getInt("Count") : 0;
+        int count = Math.max(0, rawCount);
+        if (count != rawCount) {
+            IndomitableCarrierAircraft.LOGGER.warn(
+                    "WeaponSlot count {} out of range, clamped to {}", rawCount, count);
+        }
+        return new WeaponSlot(type, count, capacity);
     }
 
     private void clamp() {
         if (capacity > 0) {
             count = Math.min(count, capacity);
         }
+    }
+
+    private static int requireNonNegative(String field, int value) {
+        if (value < 0) {
+            IndomitableCarrierAircraft.LOGGER.warn(
+                    "WeaponSlot {}={} negative, clamped to 0", field, value);
+            return 0;
+        }
+        return value;
     }
 }

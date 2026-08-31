@@ -50,6 +50,7 @@ public final class TargetingSubsystem {
                 entity -> entity.isAlive()
                         && !(entity instanceof Player)
                         && entity != aircraft
+                        && FriendlyFireFilter.canAttack(aircraft, entity)
                         && aircraft.canAttackEntity(entity)
         );
 

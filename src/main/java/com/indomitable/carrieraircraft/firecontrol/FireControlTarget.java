@@ -14,6 +14,11 @@ import java.util.UUID;
  */
 public record FireControlTarget(@Nullable UUID entityId, Vec3 fallbackPosition,
                                 ResourceKey<Level> dimension, long createdGameTime) {
+    public static FireControlTarget restore(@Nullable UUID entityId, Vec3 fallbackPosition,
+                                            ResourceKey<Level> dimension, long createdGameTime) {
+        return new FireControlTarget(entityId, fallbackPosition, dimension, createdGameTime);
+    }
+
     public static FireControlTarget position(ServerLevel level, Vec3 position) {
         return new FireControlTarget(null, position, level.dimension(), level.getGameTime());
     }

@@ -2,6 +2,7 @@ package com.indomitable.carrieraircraft.ballistic;
 
 import com.indomitable.carrieraircraft.aircraft.AircraftSpec;
 import com.indomitable.carrieraircraft.aircraft.AmmoType;
+import com.indomitable.carrieraircraft.util.Vec3Utils;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
@@ -35,19 +36,19 @@ public final class ThreeCoordinateCalculator {
         Vec3 targetVelocity = targetEntity == null ? Vec3.ZERO : targetEntity.getDeltaMovement();
         Vec3 impactPoint = targetPos.add(targetVelocity.scale(flightTime));
 
-        Vec3 horizontal = impactPoint.subtract(aircraftPos).multiply(1.0, 0.0, 1.0);
+        Vec3 horizontal = Vec3Utils.flatten(impactPoint.subtract(aircraftPos));
         if (horizontal.lengthSqr() < 0.001) {
             horizontal = new Vec3(0, 0, 1);
         }
         Vec3 attackDirection = horizontal.normalize();
 
         double releaseDistance = calculateReleaseDistance(spec, ammoType, flightTime);
-        Vec3 dropPoint = impactPoint
-                .subtract(attackDirection.scale(releaseDistance))
-                .with(net.minecraft.core.Direction.Axis.Y, attackY);
-        Vec3 turnPoint = impactPoint
-                .add(attackDirection.scale(spec.turnDistance()))
-                .with(net.minecraft.core.Direction.Axis.Y, attackY);
+        Vec3 dropPoint = Vec3Utils.replaceY(
+                impactPoint.subtract(attackDirection.scale(releaseDistance)),
+                attackY);
+        Vec3 turnPoint = Vec3Utils.replaceY(
+                impactPoint.add(attackDirection.scale(spec.turnDistance())),
+                attackY);
 
         return new AttackSolution(targetPos, impactPoint, dropPoint, turnPoint,
                 attackDirection, flightTime, releaseDistance);

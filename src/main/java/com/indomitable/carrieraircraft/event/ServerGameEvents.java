@@ -9,6 +9,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 
 import java.util.UUID;
@@ -34,10 +35,31 @@ public class ServerGameEvents {
         CameraStateTracker.getInstance().clearPlayer(playerId);
     }
 
+    /**
+     * 新存档启动时清理全部单例状态。
+     *
+     * <p>在单机模式下，玩家从世界 A 切到世界 B 时 MinecraftServer 不会重启，
+     * 仅触发 ServerStarting/Started 而不一定触发 ServerStopped（取决于 Forge 内部生命周期）。
+     * 这里双保险：ServerStartedEvent 与 ServerStoppedEvent 都调用同一清理流程。
+     */
+    @SubscribeEvent
+    public static void onServerStarted(ServerStartedEvent event) {
+        clearAllSingletons(event.getServer());
+    }
+
     @SubscribeEvent
     public static void onServerStopped(ServerStoppedEvent event) {
+        clearAllSingletons(event.getServer());
+    }
+
+    /** 清理所有 JVM 级单例的玩家/存档数据。 */
+    private static void clearAllSingletons(net.minecraft.server.MinecraftServer server) {
         FireControlSystem.getInstance().clearAll();
-        FormationManager.getInstance().releaseAllForcedChunks(event.getServer());
+        if (server != null) {
+            FormationManager.getInstance().releaseAllForcedChunks(server);
+        }
         FormationManager.getInstance().clear();
+        CameraStateTracker.getInstance().clearAll();
+        HitNotifier.clearAll();
     }
 }

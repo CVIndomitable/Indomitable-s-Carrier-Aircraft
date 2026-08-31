@@ -5,6 +5,7 @@ import com.indomitable.carrieraircraft.entity.ai.AircraftState;
 import com.indomitable.carrieraircraft.formation.FormationManager;
 import com.indomitable.carrieraircraft.registry.ModItems;
 import com.indomitable.carrieraircraft.registry.ModMenuTypes;
+import io.netty.handler.codec.DecoderException;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -27,6 +28,7 @@ import java.util.UUID;
  * 不使用 DataSlot，所有交互通过 DebugCommandPayload 网络包完成。
  */
 public class DebugMenu extends AbstractContainerMenu {
+    private static final int MAX_AIRCRAFT = 1024;
 
     public record AircraftInfo(UUID uuid, AircraftRole role, AircraftState state, int index) {}
 
@@ -67,6 +69,9 @@ public class DebugMenu extends AbstractContainerMenu {
         super(ModMenuTypes.DEBUG.get(), containerId);
 
         int count = buf.readVarInt();
+        if (count < 0 || count > MAX_AIRCRAFT) {
+            throw new DecoderException("Invalid debug aircraft count: " + count);
+        }
         for (int i = 0; i < count; i++) {
             UUID uuid = buf.readUUID();
             AircraftRole role = AircraftRole.byId(buf.readUtf());

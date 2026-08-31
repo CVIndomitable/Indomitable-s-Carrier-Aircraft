@@ -52,5 +52,19 @@ public enum AircraftState {
     /**
      * 返航状态 - 飞回玩家位置，直接降落并回收
      */
-    RETURNING
+    RETURNING;
+
+    public String translationKey() {
+        return switch (this) {
+            case STANDBY -> "aircraft_state.indomitablecarrieraircraft.standby";
+            case ORBITING -> "aircraft_state.indomitablecarrieraircraft.orbiting";
+            case LOCKED -> "aircraft_state.indomitablecarrieraircraft.locked";
+            case APPROACH -> "aircraft_state.indomitablecarrieraircraft.approach";
+            case ATTACKING -> "aircraft_state.indomitablecarrieraircraft.attacking";
+            case DROPPING -> "aircraft_state.indomitablecarrieraircraft.dropping";
+            case POST_ATTACK -> "aircraft_state.indomitablecarrieraircraft.post_attack";
+            case DOGFIGHT -> "aircraft_state.indomitablecarrieraircraft.dogfight";
+            case RETURNING -> "aircraft_state.indomitablecarrieraircraft.returning";
+        };
+    }
 }

@@ -25,7 +25,7 @@ public class AircraftSpecLoader extends SimpleJsonResourceReloadListener {
     private static final String DIRECTORY = "aircraft";
 
     private static AircraftSpecLoader instance;
-    private final Map<String, AircraftSpec> specs = new HashMap<>();
+    private final Map<ResourceLocation, AircraftSpec> specs = new HashMap<>();
 
     public AircraftSpecLoader() {
         super(GSON, DIRECTORY);
@@ -61,11 +61,10 @@ public class AircraftSpecLoader extends SimpleJsonResourceReloadListener {
                 }
 
                 AircraftSpec spec = parseSpec(json.getAsJsonObject());
-                String specId = id.getPath(); // 使用路径作为 ID（不含 namespace）
-                specs.put(specId, spec);
+                specs.put(id, spec);
                 loaded++;
 
-                IndomitableCarrierAircraft.LOGGER.info("Loaded aircraft spec: {}", specId);
+                IndomitableCarrierAircraft.LOGGER.info("Loaded aircraft spec: {}", id);
             } catch (Exception e) {
                 IndomitableCarrierAircraft.LOGGER.error("Failed to load aircraft spec {}: {}", id, e.getMessage(), e);
                 failed++;
@@ -79,10 +78,10 @@ public class AircraftSpecLoader extends SimpleJsonResourceReloadListener {
      * 加载内置机型作为默认值。
      */
     private void loadBuiltInSpecs() {
-        specs.put("b25", AircraftSpec.B25);
-        specs.put("btd", AircraftSpec.BTD);
-        specs.put("rocket_attacker", AircraftSpec.ROCKET_ATTACKER);
-        specs.put("asw_patrol", AircraftSpec.ASW_PATROL);
+        specs.put(builtInId("b25"), AircraftSpec.B25);
+        specs.put(builtInId("btd"), AircraftSpec.BTD);
+        specs.put(builtInId("rocket_attacker"), AircraftSpec.ROCKET_ATTACKER);
+        specs.put(builtInId("asw_patrol"), AircraftSpec.ASW_PATROL);
         IndomitableCarrierAircraft.LOGGER.info("Loaded {} built-in aircraft specs", specs.size());
     }
 
@@ -112,7 +111,7 @@ public class AircraftSpecLoader extends SimpleJsonResourceReloadListener {
                 speed, standbyHeight, attackHeight, attackRange, turnDistance, health,
                 seaAmmoCapacity, magazineCapacity, burstSize, weaponDamage, explosionRadius,
                 turretRange, aswRange, airWeaponMode, seaAttackModes, allowedSeaAmmo
-        );
+        ).validated();
     }
 
     // ==================== JSON 解析工具方法 ====================
@@ -187,11 +186,12 @@ public class AircraftSpecLoader extends SimpleJsonResourceReloadListener {
     /**
      * 根据 ID 获取机型配置。
      *
-     * @param id 机型 ID（如 "b25"、"btd"）
+     * @param id 机型 ID（必须显式带 namespace，例如 {@code "mymod:heavy_bomber"} 或
+     *           {@code "indomitablecarrieraircraft:b25"}）。无 namespace 时按内置命名空间解析。
      * @return 机型配置，如果不存在则返回 B25 默认值
      */
     public AircraftSpec getSpec(String id) {
-        return specs.getOrDefault(id, AircraftSpec.B25);
+        return specs.getOrDefault(parseId(id), AircraftSpec.B25);
     }
 
     /**
@@ -213,13 +213,21 @@ public class AircraftSpecLoader extends SimpleJsonResourceReloadListener {
      * 检查机型是否存在。
      */
     public boolean hasSpec(String id) {
-        return specs.containsKey(id);
+        return specs.containsKey(parseId(id));
     }
 
     /**
      * 获取所有已加载的机型 ID。
      */
     public Set<String> getAllSpecIds() {
-        return specs.keySet();
+        return specs.keySet().stream().map(ResourceLocation::toString).collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    private static ResourceLocation builtInId(String path) {
+        return ResourceLocation.fromNamespaceAndPath(IndomitableCarrierAircraft.MOD_ID, path);
+    }
+
+    private static ResourceLocation parseId(String id) {
+        return id.indexOf(':') >= 0 ? ResourceLocation.parse(id) : builtInId(id);
     }
 }
